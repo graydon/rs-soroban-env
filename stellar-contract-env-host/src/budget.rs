@@ -1,3 +1,5 @@
+use stellar_contract_env_common::xdr::ScVmErrorCode;
+
 use crate::HostError;
 
 // TODO: move this to an XDR enum
@@ -11,6 +13,8 @@ pub enum CostType {
     WasmInsnExec = 4,
     WasmMemAlloc = 5,
     HostEventDebug = 6,
+    HostFunction = 7,
+    VisitObject = 8,
 }
 
 // TODO: add XDR support for iterating over all the elements of an enum
@@ -23,6 +27,7 @@ impl CostType {
             CostType::HostVecAllocCell,
             CostType::WasmInsnExec,
             CostType::WasmMemAlloc,
+            CostType::HostEventDebug,
         ];
         VARIANTS.iter()
     }
@@ -159,7 +164,7 @@ impl BudgetDimension {
         self.count = self.count.saturating_add(cm.evaluate(input));
         if self.is_over_budget() {
             // TODO: convert this to a proper error code type.
-            Err(HostError::General("budget limit exceeded"))
+            Err(ScVmErrorCode::TrapMemLimitExceeded.into())
         } else {
             Ok(())
         }

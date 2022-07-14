@@ -1,4 +1,7 @@
-use stellar_xdr::{ScStatic, ScStatus, ScStatusType};
+use stellar_xdr::{
+    ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode,
+    ScHostValErrorCode, ScStatic, ScStatus, ScStatusType, ScUnknownErrorCode, ScVmErrorCode,
+};
 
 use super::{BitSet, Env, EnvVal, IntoEnvVal, Object, Status, Symbol};
 use core::fmt::Debug;
@@ -42,7 +45,7 @@ pub enum Tag {
 }
 
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct RawVal(u64);
 
 impl AsRef<RawVal> for RawVal {

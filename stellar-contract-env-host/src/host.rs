@@ -18,7 +18,9 @@ use stellar_contract_env_common::xdr::{
 };
 
 use crate::budget::{Budget, CostType};
-use crate::events::Events;
+use crate::events::{
+    DebugError, DebugErrorSource, DebugEvent, DebugEventSource, DebugMessageAndStatus, Events,
+};
 use crate::storage::Storage;
 use crate::weak_host::WeakHost;
 
@@ -42,13 +44,32 @@ use crate::{
     Static, Status, Symbol, SymbolError, Tag, Val, UNKNOWN_ERROR,
 };
 
-use thiserror::Error;
+#[derive(Debug)]
+pub struct HostError {
+    status: Status,
+    backtrace: backtrace::Backtrace,
+}
 
-#[derive(Error, Debug)]
-pub enum HostError {
-    /// An error with specific status code.
-    #[error("host error: {0}, status: {:?}")]
-    WithStatus(String, ScStatus),
+impl<T> From<T> for HostError
+where
+    Status: From<T>,
+{
+    fn from(status: T) -> Self {
+        let backtrace = backtrace::Backtrace::new();
+        let status: Status = status.into();
+        Self { status, backtrace }
+    }
+}
+
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Status code: {:#?}", self.status)?;
+        writeln!(f, "Error context:")?;
+        writeln!(f, "{:#?}", self.backtrace)
+    }
+}
+
+/*
     /// XDR error.
     #[error("XDR error: {0}")]
     XDR(#[from] xdr::Error),
@@ -64,6 +85,7 @@ pub enum HostError {
     #[error("general host error: {0}")]
     General(&'static str),
 }
+
 
 impl From<TryFromIntError> for HostError {
     fn from(_: TryFromIntError) -> Self {
@@ -97,8 +119,18 @@ impl From<BitSetError> for HostError {
     }
 }
 
+impl From<ConversionError> for HostError {
+    fn from(_: ConversionError) -> Self {
+        HostError::General("conversion error")
+    }
+}
+
+ */
+
 impl From<&HostError> for ScStatus {
     fn from(err: &HostError) -> Self {
+        err.status.into()
+        /*
         match err {
             HostError::General(_) => ScStatus::UnknownError(ScUnknownErrorCode::General),
             HostError::WithStatus(_, status) => status.to_owned(),
@@ -161,12 +193,7 @@ impl From<&HostError> for ScStatus {
             #[cfg(feature = "vm")]
             HostError::ParityWasmElements(_) => ScStatus::VmError(ScVmErrorCode::Unknown),
         }
-    }
-}
-
-impl From<ConversionError> for HostError {
-    fn from(_: ConversionError) -> Self {
-        HostError::General("conversion error")
+        */
     }
 }
 
@@ -288,13 +315,68 @@ impl Host {
         f(&mut *self.0.events.borrow_mut())
     }
 
-    pub(crate) fn add_debug_event(
-        &self,
-        msg: &'static str,
-        args: &[RawVal],
-    ) -> Result<(), HostError> {
-        self.charge_budget(CostType::HostEventDebug, args.len() as u64)?;
-        self.get_events_mut(|events| Ok(events.add_debug_event(msg, args)))
+    /// Records a debug event. This in itself is not necessarily an error; it might just
+    /// be some contextual event we want to put in a debug log for diagnostic purpopses.
+    pub(crate) fn debug_event<T>(&self, src: T) -> Result<(), HostError>
+    where
+        DebugEvent: From<T>,
+    {
+        // We want to record an event _before_ we charge the budget, to maximize
+        // the chance we return "what the contract was doing when it ran out of
+        // gas" in cases it does. This does mean in that one case we'll exceed
+        // the gas limit a tiny amount (one event-worth) but it's not something
+        // users can harm us with nor does it observably effect the order the
+        // contract runs out of gas in; this is an atomic action from the
+        // contract's perspective.
+        let event: DebugEvent = src.into();
+        let len = event.args.len() as u64;
+        self.get_events_mut(|events| Ok(events.record_debug_event(event)))?;
+        self.charge_budget(CostType::HostEventDebug, len)
+    }
+
+    /// Records a debug-event from its input in as much detail as possible, then
+    /// converts its input to a (often coarser-granularity) [Status] code, and then
+    /// forms a [HostError] with it (which also captures a [backtrace::Backtrace]).
+    /// This is the method you want to call any time there's a finer-granularity error
+    /// type that you want to log the details of and then downgrade fail with.
+    pub(crate) fn err<T>(&self, src: T) -> HostError
+    where
+        DebugError: From<T>,
+    {
+        let ds: DebugError = src.into();
+        if let Err(e) = self.debug_event(ds.event) {
+            e
+        } else {
+            ds.status.into()
+        }
+    }
+
+    /// Helper for the simplest string + general-error path.
+    pub(crate) fn general_err(&self, msg: &'static str) -> HostError {
+        self.err(DebugError::general().msg(msg))
+    }
+
+    /// Helper for the simplest status-only error path.
+    pub(crate) fn status_err<T>(&self, status: T) -> HostError
+    where
+        Status: From<T>,
+    {
+        self.err(DebugError::new(status))
+    }
+
+    /// Given a result carrying some error type that can be converted to a
+    /// DebugStatus, calls self.err with it when there's an error. Returns a
+    /// result over HostError.
+    ///
+    /// If you have an error type T you want to record as a detailed debug event
+    /// and a less-detailed Status code embedded in a HostError, add an `impl
+    /// From<T> for DebugStatus` over in the [events] module and call this where
+    /// the error is generated.
+    pub(crate) fn map_err<T, E>(&self, res: Result<T, E>) -> Result<T, HostError>
+    where
+        DebugError: From<E>,
+    {
+        res.map_err(|e| self.err(e.into()))
     }
 
     pub(crate) fn visit_storage<F, U>(&self, f: F) -> Result<U, HostError>
@@ -356,9 +438,9 @@ impl Host {
     pub fn push_test_frame(&self, id: Object) -> Result<FrameGuard, HostError> {
         let contract_id = self.visit_obj(id, |b: &Vec<u8>| {
             Ok(Hash(b.clone().try_into().map_err(|_| {
-                HostError::WithStatus(
-                    String::from("not a binary object"),
-                    ScStatus::HostObjectError(ScHostObjErrorCode::UnexpectedType),
+                self.err(
+                    DebugError::new(ScHostObjErrorCode::UnexpectedType)
+                        .msg("Binary has wrong size to convert to Hash"),
                 )
             })?))
         })?;
@@ -379,12 +461,12 @@ impl Host {
     where
         F: FnOnce(&Frame) -> Result<U, HostError>,
     {
-        f(self.0.context.borrow().last().ok_or_else(|| {
-            HostError::WithStatus(
-                String::from("no contract currently running"),
-                ScStatus::HostContextError(ScHostContextErrorCode::NoContractRunning),
-            )
-        })?)
+        f(self
+            .0
+            .context
+            .borrow()
+            .last()
+            .ok_or_else(|| self.err(DebugError::new(ScHostContextErrorCode::NoContractRunning)))?)
     }
 
     /// Returns [`Hash`] contract ID from the VM frame at the top of the context
@@ -394,18 +476,19 @@ impl Host {
         self.with_current_frame(|frame| match frame {
             #[cfg(feature = "vm")]
             Frame::ContractVM(vm) => Ok(vm.contract_id.clone()),
-            Frame::HostFunction(_) => Err(HostError::General(
-                "Host function context has no contract ID",
-            )),
+            Frame::HostFunction(_) => {
+                Err(self.general_err("Host function context has no contract ID"))
+            }
             #[cfg(feature = "testutils")]
             Frame::TestContract(id) => Ok(id.clone()),
         })
     }
 
-    unsafe fn unchecked_visit_val_obj<F, U>(&self, val: RawVal, f: F) -> U
+    unsafe fn unchecked_visit_val_obj<F, U>(&self, val: RawVal, f: F) -> Result<U, HostError>
     where
-        F: FnOnce(Option<&HostObject>) -> U,
+        F: FnOnce(Option<&HostObject>) -> Result<U, HostError>,
     {
+        self.charge_budget(CostType::VisitObject, 1)?;
         let r = self.0.objects.borrow();
         let index = <Object as RawValConvertible>::unchecked_from_val(val).get_handle() as usize;
         f(r.get(index))
@@ -417,15 +500,9 @@ impl Host {
     {
         unsafe {
             self.unchecked_visit_val_obj(obj.into(), |hopt| match hopt {
-                None => Err(HostError::WithStatus(
-                    String::from("unknown object reference"),
-                    ScStatus::HostObjectError(ScHostObjErrorCode::UnknownReference),
-                )),
+                None => Err(self.status_err(ScHostObjErrorCode::UnknownReference)),
                 Some(hobj) => match HOT::try_extract(hobj) {
-                    None => Err(HostError::WithStatus(
-                        String::from("unexpected host object type"),
-                        ScStatus::HostObjectError(ScHostObjErrorCode::UnexpectedType),
-                    )),
+                    None => Err(self.status_err(ScHostObjErrorCode::UnexpectedType)),
                     Some(hot) => f(hot),
                 },
             })
@@ -476,10 +553,7 @@ impl Host {
                     } else if tag_static.is_type(ScStatic::LedgerKeyContractCodeWasm) {
                         Ok(ScVal::Static(ScStatic::LedgerKeyContractCodeWasm))
                     } else {
-                        Err(HostError::WithStatus(
-                            String::from("unknown Tag::Static case"),
-                            ScStatus::HostValueError(ScHostValErrorCode::StaticUnknown),
-                        ))
+                        Err(self.status_err(ScHostValErrorCode::StaticUnknown))
                     }
                 }
                 Tag::Object => unsafe {
@@ -491,53 +565,16 @@ impl Host {
                     let sym: Symbol =
                         unsafe { <Symbol as RawValConvertible>::unchecked_from_val(val) };
                     let str: String = sym.into_iter().collect();
-                    Ok(ScVal::Symbol(str.as_bytes().try_into()?))
+                    Ok(ScVal::Symbol(self.map_err(str.as_bytes().try_into())?))
                 }
                 Tag::BitSet => Ok(ScVal::Bitset(val.get_payload())),
                 Tag::Status => {
                     let status: Status =
                         unsafe { <Status as RawValConvertible>::unchecked_from_val(val) };
-                    if status.is_ok() {
-                        Ok(ScVal::Status(ScStatus::Ok))
-                    } else if status.is_type(ScStatusType::UnknownError) {
-                        Ok(ScVal::Status(ScStatus::UnknownError(
-                            (status.get_code() as i32).try_into()?,
-                        )))
-                    } else if status.is_type(ScStatusType::HostValueError) {
-                        Ok(ScVal::Status(ScStatus::HostValueError(
-                            (status.get_code() as i32).try_into()?,
-                        )))
-                    } else if status.is_type(ScStatusType::HostObjectError) {
-                        Ok(ScVal::Status(ScStatus::HostObjectError(
-                            (status.get_code() as i32).try_into()?,
-                        )))
-                    } else if status.is_type(ScStatusType::HostFunctionError) {
-                        Ok(ScVal::Status(ScStatus::HostFunctionError(
-                            (status.get_code() as i32).try_into()?,
-                        )))
-                    } else if status.is_type(ScStatusType::HostStorageError) {
-                        Ok(ScVal::Status(ScStatus::HostStorageError(
-                            (status.get_code() as i32).try_into()?,
-                        )))
-                    } else if status.is_type(ScStatusType::HostContextError) {
-                        Ok(ScVal::Status(ScStatus::HostContextError(
-                            (status.get_code() as i32).try_into()?,
-                        )))
-                    } else if status.is_type(ScStatusType::VmError) {
-                        Ok(ScVal::Status(ScStatus::VmError(
-                            (status.get_code() as i32).try_into()?,
-                        )))
-                    } else {
-                        Err(HostError::WithStatus(
-                            String::from("unknown Tag::Status case"),
-                            ScStatus::HostValueError(ScHostValErrorCode::StatusUnknown),
-                        ))
-                    }
+                    let scstatus: ScStatus = self.map_err(status.try_into())?;
+                    Ok(ScVal::Status(scstatus))
                 }
-                Tag::Reserved => Err(HostError::WithStatus(
-                    String::from("Tag::Reserved value"),
-                    ScStatus::HostValueError(ScHostValErrorCode::ReservedTagValue),
-                )),
+                Tag::Reserved => Err(self.status_err(ScHostValErrorCode::ReservedTagValue)),
             }
         }
     }
@@ -553,10 +590,7 @@ impl Host {
                 if *i >= 0 {
                     unsafe { RawVal::unchecked_from_u63(*i) }
                 } else {
-                    return Err(HostError::WithStatus(
-                        String::from("ScvU63 > i64::MAX"),
-                        ScStatus::HostValueError(ScHostValErrorCode::U63OutOfRange),
-                    ));
+                    return Err(self.status_err(ScHostValErrorCode::U63OutOfRange));
                 }
             }
             ScVal::U32(u) => (*u).into(),
@@ -566,20 +600,14 @@ impl Host {
             ScVal::Static(ScStatic::False) => RawVal::from_bool(false),
             ScVal::Static(other) => RawVal::from_other_static(*other),
             ScVal::Object(None) => {
-                return Err(HostError::WithStatus(
-                    String::from("missing expected ScvObject"),
-                    ScStatus::HostValueError(ScHostValErrorCode::MissingObject),
-                ))
+                return Err(self.status_err(ScHostValErrorCode::MissingObject));
             }
             ScVal::Object(Some(ob)) => return Ok(self.to_host_obj(&*ob)?.into()),
             ScVal::Symbol(bytes) => {
                 let ss = match std::str::from_utf8(bytes.as_slice()) {
                     Ok(ss) => ss,
                     Err(_) => {
-                        return Err(HostError::WithStatus(
-                            String::from("non-UTF-8 in symbol"),
-                            ScStatus::HostValueError(ScHostValErrorCode::SymbolContainsNonUtf8),
-                        ))
+                        return Err(self.status_err(ScHostValErrorCode::SymbolContainsNonUtf8));
                     }
                 };
                 Symbol::try_from_str(ss)?.into()
@@ -619,17 +647,14 @@ impl Host {
     pub(crate) fn from_host_obj(&self, ob: Object) -> Result<ScObject, HostError> {
         unsafe {
             self.unchecked_visit_val_obj(ob.into(), |ob| match ob {
-                None => Err(HostError::WithStatus(
-                    String::from("unknown object reference"),
-                    ScStatus::HostObjectError(ScHostObjErrorCode::UnknownReference),
-                )),
+                None => Err(self.status_err(ScHostObjErrorCode::UnknownReference)),
                 Some(ho) => match ho {
                     HostObject::Vec(vv) => {
                         let mut sv = Vec::new();
                         for e in vv.iter() {
                             sv.push(self.from_host_val(e.val)?);
                         }
-                        Ok(ScObject::Vec(ScVec(sv.try_into()?)))
+                        Ok(ScObject::Vec(ScVec(self.map_err(sv.try_into())?)))
                     }
                     HostObject::Map(mm) => {
                         let mut mv = Vec::new();
@@ -638,7 +663,7 @@ impl Host {
                             let val = self.from_host_val(v.val)?;
                             mv.push(ScMapEntry { key, val });
                         }
-                        Ok(ScObject::Map(ScMap(mv.try_into()?)))
+                        Ok(ScObject::Map(ScMap(self.map_err(mv.try_into())?)))
                     }
                     HostObject::U64(u) => Ok(ScObject::U64(*u)),
                     HostObject::I64(i) => Ok(ScObject::I64(*i)),
@@ -961,7 +986,7 @@ impl CheckedEnv for Host {
     type Error = HostError;
 
     fn log_value(&self, v: RawVal) -> Result<RawVal, HostError> {
-        self.add_debug_event("log", &[v])?;
+        self.record_debug_event("log", &[v])?;
         Ok(RawVal::from_void())
     }
 
@@ -978,8 +1003,11 @@ impl CheckedEnv for Host {
     }
 
     fn obj_cmp(&self, a: RawVal, b: RawVal) -> Result<i64, HostError> {
+        self.charge_budget(CostType::HostFunction, 2)?;
         let res = unsafe {
-            self.unchecked_visit_val_obj(a, |ao| self.unchecked_visit_val_obj(b, |bo| ao.cmp(&bo)))
+            self.unchecked_visit_val_obj(a, |ao| {
+                self.unchecked_visit_val_obj(b, |bo| Ok(ao.cmp(&bo)))
+            })?
         };
         Ok(match res {
             Ordering::Less => -1,
