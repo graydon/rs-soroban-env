@@ -1,7 +1,7 @@
 #[cfg(feature = "std")]
 use std::rc::Rc;
 
-use crate::{BitSet, Env, Object, RawVal, RawValConvertible, Status, Symbol, Tag};
+use crate::{Env, Object, RawVal, RawValConvertible, Status, Symbol, Tag};
 use core::cmp::Ordering;
 
 /// General trait representing the ability to compare two values of some type.
@@ -143,7 +143,26 @@ impl<E: Env> Compare<RawVal> for E {
             Ok(Ordering::Greater)
         } else {
             // Tags are equal so we only have to switch on one.
+            if a.is_object() {
+                // Fast-path equal handles
+                if a.get_body() == b.get_body() {
+                    return Ok(Ordering::Equal);
+                } else {
+                    let a = unsafe { Object::unchecked_from_val(*a) };
+                    let b = unsafe { Object::unchecked_from_val(*b) };
+                    return self.compare(&a, &b);
+                }
+            }
             match a_tag {
+                Tag::False => Ok(Ordering::Equal),
+                Tag::True => Ok(Ordering::Equal),
+                Tag::Void => Ok(Ordering::Equal),
+
+                Tag::Status => {
+                    let a = unsafe { <Status as RawValConvertible>::unchecked_from_val(*a) };
+                    let b = unsafe { <Status as RawValConvertible>::unchecked_from_val(*b) };
+                    Ok(a.cmp(&b))
+                }
                 Tag::U32 => {
                     let a = unsafe { <u32 as RawValConvertible>::unchecked_from_val(*a) };
                     let b = unsafe { <u32 as RawValConvertible>::unchecked_from_val(*b) };
@@ -154,28 +173,46 @@ impl<E: Env> Compare<RawVal> for E {
                     let b = unsafe { <i32 as RawValConvertible>::unchecked_from_val(*b) };
                     Ok(a.cmp(&b))
                 }
-                Tag::Static => Ok(a.get_body().cmp(&b.get_body())),
-                Tag::Object => {
-                    let a = unsafe { Object::unchecked_from_val(*a) };
-                    let b = unsafe { Object::unchecked_from_val(*b) };
-                    self.compare(&a, &b)
+
+                Tag::U64Small
+                | Tag::TimepointSmall
+                | Tag::DurationSmall
+                | Tag::U128Small
+                | Tag::U256Small => Ok(a.get_body().cmp(&b.get_body())),
+
+                Tag::I64Small | Tag::I128Small | Tag::I256Small => {
+                    Ok(a.get_signed_body().cmp(&b.get_signed_body()))
                 }
-                Tag::Symbol => {
-                    let a = unsafe { <Symbol as RawValConvertible>::unchecked_from_val(*a) };
-                    let b = unsafe { <Symbol as RawValConvertible>::unchecked_from_val(*b) };
-                    Ok(a.cmp(&b))
-                }
-                Tag::BitSet => {
-                    let a = unsafe { <BitSet as RawValConvertible>::unchecked_from_val(*a) };
-                    let b = unsafe { <BitSet as RawValConvertible>::unchecked_from_val(*b) };
-                    Ok(a.cmp(&b))
-                }
-                Tag::Status => {
-                    let a = unsafe { <Status as RawValConvertible>::unchecked_from_val(*a) };
-                    let b = unsafe { <Status as RawValConvertible>::unchecked_from_val(*b) };
-                    Ok(a.cmp(&b))
-                }
-                Tag::Reserved => Ok(a.get_body().cmp(&b.get_body())),
+
+                Tag::SymbolSmall => todo!(),
+
+                Tag::LedgerKeyContractExecutable => Ok(Ordering::Equal),
+
+                Tag::SmallCodeUpperBound => Ok(Ordering::Equal),
+                Tag::ObjectCodeLowerBound => Ok(Ordering::Equal),
+
+                // None of the object cases should be reachable, they
+                // should all have been handled by the is_object() branch
+                // above.
+                Tag::U64Object
+                | Tag::I64Object
+                | Tag::TimepointObject
+                | Tag::DurationObject
+                | Tag::U128Object
+                | Tag::I128Object
+                | Tag::U256Object
+                | Tag::I256Object
+                | Tag::BytesObject
+                | Tag::StringObject
+                | Tag::SymbolObject
+                | Tag::VecObject
+                | Tag::MapObject
+                | Tag::ContractExecutableObject
+                | Tag::AddressObject
+                | Tag::LedgerKeyNonceObject => unreachable!(),
+
+                Tag::ObjectCodeUpperBound => Ok(Ordering::Equal),
+                Tag::Bad => Ok(Ordering::Equal),
             }
         }
     }

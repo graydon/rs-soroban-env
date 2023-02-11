@@ -5,7 +5,7 @@ use core::convert::Infallible;
 
 use soroban_env_common::call_macro_with_all_host_functions;
 
-use super::{Env, EnvBase, Object, RawVal, Status, Symbol};
+use super::{Env, EnvBase, BytesObject, Object, RawVal, Status, Symbol};
 #[cfg(target_family = "wasm")]
 use static_assertions as sa;
 
@@ -59,7 +59,7 @@ impl EnvBase for Guest {
         unimplemented!()
     }
 
-    fn bytes_new_from_slice(&self, mem: &[u8]) -> Result<Object, Self::Error> {
+    fn bytes_new_from_slice(&self, mem: &[u8]) -> Result<BytesObject, Self::Error> {
         unimplemented!()
     }
 
@@ -90,6 +90,26 @@ impl EnvBase for Guest {
         vals: &[RawVal],
         strs: &[&'static str],
     ) -> Result<(), Self::Error> {
+        unimplemented!()
+    }
+
+    fn bytes_new_from_static_slice(&self, s: &'static [u8]) -> Result<soroban_env_common::BytesObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn string_new_from_slice<'a>(&self, s: &'a str) -> Result<soroban_env_common::StringObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn string_new_from_static_slice(&self, s: &'static str) -> Result<soroban_env_common::StringObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn symbol_new_from_slice<'a>(&self, s: soroban_env_common::SymbolStr<'a>) -> Result<soroban_env_common::SymbolObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn symbol_new_from_static_slice(&self, s: soroban_env_common::SymbolStr<'static>) -> Result<soroban_env_common::SymbolObject, Self::Error> {
         unimplemented!()
     }
 }
@@ -150,6 +170,26 @@ impl EnvBase for Guest {
         let lm_pos: RawVal = RawVal::from_u32(mem.as_ptr() as u32);
         let len: RawVal = RawVal::from_u32(mem.len() as u32);
         self.bytes_new_from_linear_memory(lm_pos, len)
+    }
+
+    fn bytes_new_from_static_slice(&self, s: &'static [u8]) -> Result<soroban_env_common::BytesObject, Self::Error> {
+        todo!()
+    }
+
+    fn string_new_from_slice<'a>(&self, s: &'a str) -> Result<soroban_env_common::StringObject, Self::Error> {
+        todo!()
+    }
+
+    fn string_new_from_static_slice(&self, s: &'static str) -> Result<soroban_env_common::StringObject, Self::Error> {
+        todo!()
+    }
+
+    fn symbol_new_from_slice<'a>(&self, s: soroban_env_common::SymbolStr<'a>) -> Result<soroban_env_common::SymbolObject, Self::Error> {
+        todo!()
+    }
+
+    fn symbol_new_from_static_slice(&self, s: soroban_env_common::SymbolStr<'static>) -> Result<soroban_env_common::SymbolObject, Self::Error> {
+        todo!()
     }
 
     fn log_static_fmt_val(&self, fmt: &'static str, v: RawVal) -> Result<(), Self::Error> {

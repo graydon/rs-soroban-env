@@ -1,11 +1,8 @@
 use std::{error::Error, io::Write};
-
-use soroban_env_common::Object;
-
 use crate::{
     budget::CostType,
-    xdr::{ReadXdr, WriteXdr},
-    Host, HostError,
+    xdr::{ReadXdr, WriteXdr, ScBytes},
+    Host, HostError, Object,
 };
 
 use sha2::{Digest, Sha256};
@@ -72,6 +69,6 @@ impl Host {
     }
 
     pub(crate) fn metered_from_xdr_obj<T: ReadXdr>(&self, bytes: Object) -> Result<T, HostError> {
-        self.visit_obj(bytes, |hv: &Vec<u8>| self.metered_from_xdr(hv.as_slice()))
+        self.visit_obj(bytes, |hv: &ScBytes| self.metered_from_xdr(hv.as_slice()))
     }
 }

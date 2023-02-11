@@ -5,7 +5,7 @@ use soroban_env_common::{
     xdr::{
         AccountEntry, AccountId, ContractId, CreateContractArgs, HostFunction,
         InstallContractCodeArgs, LedgerEntry, LedgerEntryData, LedgerKey, PublicKey,
-        ScContractCode, ScObject, ScVal, ScVec, Uint256,
+        ScContractExecutable, ScObject, ScVal, ScVec, Uint256,
     },
     Object, RawVal, TryIntoVal,
 };
@@ -160,7 +160,7 @@ impl Host {
         let id_obj: RawVal = self
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
                 contract_id: ContractId::SourceAccount(Uint256(generate_bytes_array())),
-                source: ScContractCode::WasmRef(wasm_id),
+                source: ScContractExecutable::WasmRef(wasm_id),
             }))?
             .try_into_val(self)?;
         self.remove_source_account();

@@ -2,8 +2,7 @@ use super::{DebugEvent, Events, HostEvent};
 use crate::{
     budget::{AsBudget, Budget},
     host::metered_clone::MeteredClone,
-    xdr,
-    xdr::ScObject,
+    xdr, xdr::ScVal,
     Host, HostError, MeteredVector, Object, RawVal,
 };
 
@@ -20,7 +19,7 @@ pub(crate) struct InternalContractEvent {
 impl InternalContractEvent {
     // Metering: covered by components
     pub fn to_xdr(self, host: &Host) -> Result<xdr::ContractEvent, HostError> {
-        let topics = if let ScObject::Vec(v) = host.from_host_obj(self.topics)? {
+        let topics = if let ScVal::Vec(Some(v)) = host.from_host_obj(self.topics)?.into() {
             Ok(v)
         } else {
             Err(host.err_status(xdr::ScHostObjErrorCode::UnexpectedType))

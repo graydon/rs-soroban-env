@@ -1,14 +1,17 @@
 use super::metered_clone::MeteredClone;
 use crate::xdr::{
     Hash, LedgerKey, LedgerKeyContractData, ScHostFnErrorCode, ScHostObjErrorCode,
-    ScHostValErrorCode, ScStatic, ScVal, ScVec, Uint256,
+    ScHostValErrorCode, ScVal, ScVec, Uint256,
 };
 use crate::{
-    budget::CostType, events::DebugError, host_object::HostVec, Host, HostError, Object, RawVal,
+    budget::CostType, host_object::HostVec, Host, HostError, Object, RawVal,
+    events::{DebugError, CONTRACT_EVENT_TOPICS_LIMIT},
+    host_object::{HostObject},
+    ScValObject,
 };
 use ed25519_dalek::{PublicKey, Signature, SIGNATURE_LENGTH};
 use sha2::{Digest, Sha256};
-use soroban_env_common::xdr::{self, AccountId, ScObject};
+use soroban_env_common::xdr::{self, AccountId};
 use soroban_env_common::TryFromVal;
 
 impl Host {
@@ -214,13 +217,13 @@ impl Host {
     pub fn contract_data_key_from_rawval(&self, k: RawVal) -> Result<LedgerKey, HostError> {
         let key_scval = self.from_host_val(k)?;
         match &key_scval {
-            ScVal::Static(ScStatic::LedgerKeyContractCode) => {
+            ScVal::LedgerKeyContractExecutable => {
                 return Err(self.err_status_msg(
                     ScHostFnErrorCode::InputArgsInvalid,
                     "cannot update contract code",
                 ));
             }
-            ScVal::Object(Some(ScObject::NonceKey(_))) => {
+            ScVal::LedgerKeyNonce(_) => {
                 return Err(self.err_status_msg(
                     ScHostFnErrorCode::InputArgsInvalid,
                     "cannot access internal nonce",

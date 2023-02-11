@@ -1,6 +1,4 @@
-use stellar_xdr::ScObjectType;
-
-use crate::{ConversionError, Env, Object, RawVal, RawValConvertible, TryFromVal, TryIntoVal};
+use crate::{ConversionError, Env, Object, RawVal, RawValConvertible, Tag, TryFromVal, TryIntoVal};
 
 macro_rules! impl_for_tuple {
     ( $count:literal $count_usize:literal $($typ:ident $idx:tt)+ ) => {
@@ -15,7 +13,7 @@ macro_rules! impl_for_tuple {
 
             fn try_from_val(env: &E, val: &RawVal) -> Result<Self, Self::Error> {
                 let val = *val;
-                if !Object::val_is_obj_type(val, ScObjectType::Vec) {
+                if !val.has_tag(Tag::VecObject) {
                     return Err(ConversionError);
                 }
                 let vec = unsafe { Object::unchecked_from_val(val) };

@@ -11,11 +11,11 @@ use soroban_env_common::{
         AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEventType, ContractId,
         CreateContractArgs, ExtensionPoint, Hash, HashIdPreimage, HostFunction, HostFunctionType,
         InstallContractCodeArgs, Int128Parts, LedgerEntryData, LedgerKey, LedgerKeyContractCode,
-        ScAddress, ScContractCode, ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode,
-        ScHostStorageErrorCode, ScHostValErrorCode, ScMap, ScMapEntry, ScObject, ScStatusType,
-        ScUnknownErrorCode, ScVal, ScVec,
+        ScAddress, ScContractExecutable, ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode,
+        ScHostStorageErrorCode, ScHostValErrorCode, ScMap, ScMapEntry, ScStatusType,
+        ScUnknownErrorCode, ScVal, ScVec, ScBytes, ScSymbol, ScString
     },
-    Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller, VmCallerEnv,
+    Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller, VmCallerEnv, ScValObject, ScValObjRef, SymbolSmall
 };
 
 use crate::auth::{AuthorizationManager, AuthorizationManagerSnapshot, RecordedAuthPayload};
@@ -27,7 +27,7 @@ use crate::storage::{Storage, StorageMap};
 
 use crate::host_object::{HostMap, HostObject, HostObjectType, HostVec};
 #[cfg(feature = "vm")]
-use crate::SymbolStr;
+use crate::SymbolSmallStr;
 #[cfg(feature = "vm")]
 use crate::Vm;
 use crate::{EnvBase, Object, RawVal, RawValConvertible, Symbol};
@@ -70,14 +70,14 @@ pub trait ContractFunctionSet {
 #[derive(Debug, Clone)]
 pub struct TestContractFrame {
     pub id: Hash,
-    pub func: Symbol,
+    pub func: SymbolSmall,
     pub args: Vec<RawVal>,
     panic: Rc<RefCell<Option<Status>>>,
 }
 
 #[cfg(any(test, feature = "testutils"))]
 impl TestContractFrame {
-    pub fn new(id: Hash, func: Symbol, args: Vec<RawVal>) -> Self {
+    pub fn new(id: Hash, func: SymbolSmall, args: Vec<RawVal>) -> Self {
         Self {
             id,
             func,
@@ -101,7 +101,7 @@ impl TestContractFrame {
 #[derive(Clone)]
 pub(crate) enum Frame {
     #[cfg(feature = "vm")]
-    ContractVM(Rc<Vm>, Symbol, Vec<RawVal>),
+    ContractVM(Rc<Vm>, SymbolSmall, Vec<RawVal>),
     HostFunction(HostFunctionType),
     Token(Hash, Symbol, Vec<RawVal>),
     #[cfg(any(test, feature = "testutils"))]
@@ -171,30 +171,30 @@ impl Debug for Host {
     }
 }
 
-impl Convert<&Object, ScObject> for Host {
+impl Convert<&Object, ScValObject> for Host {
     type Error = HostError;
-    fn convert(&self, ob: &Object) -> Result<ScObject, Self::Error> {
+    fn convert(&self, ob: &Object) -> Result<ScValObject, Self::Error> {
         self.from_host_obj(*ob)
     }
 }
 
-impl Convert<Object, ScObject> for Host {
+impl Convert<Object, ScValObject> for Host {
     type Error = HostError;
-    fn convert(&self, ob: Object) -> Result<ScObject, Self::Error> {
+    fn convert(&self, ob: Object) -> Result<ScValObject, Self::Error> {
         self.from_host_obj(ob)
     }
 }
 
-impl Convert<&ScObject, Object> for Host {
+impl<'a> Convert<&ScValObjRef<'a>, Object> for Host {
     type Error = HostError;
-    fn convert(&self, ob: &ScObject) -> Result<Object, Self::Error> {
+    fn convert(&self, ob: &ScValObjRef<'a>) -> Result<Object, Self::Error> {
         self.to_host_obj(ob)
     }
 }
 
-impl Convert<ScObject, Object> for Host {
+impl<'a> Convert<ScValObjRef<'a>, Object> for Host {
     type Error = HostError;
-    fn convert(&self, ob: ScObject) -> Result<Object, Self::Error> {
+    fn convert(&self, ob: ScValObjRef<'a>) -> Result<Object, Self::Error> {
         self.to_host_obj(&ob)
     }
 }
@@ -525,7 +525,7 @@ impl Host {
     pub fn with_test_contract_frame<F>(
         &self,
         id: Hash,
-        func: Symbol,
+        func: SymbolSmall,
         f: F,
     ) -> Result<RawVal, HostError>
     where
@@ -631,7 +631,7 @@ impl Host {
             .map_err(|_| self.err_status(ScHostValErrorCode::UnknownError))
     }
 
-    pub(crate) fn from_host_obj(&self, ob: Object) -> Result<ScObject, HostError> {
+    pub(crate) fn from_host_obj(&self, ob: Object) -> Result<ScValObject, HostError> {
         unsafe {
             self.unchecked_visit_val_obj(ob.into(), |ob| {
                 // This accounts for conversion of "primitive" objects (e.g U64)
@@ -639,67 +639,67 @@ impl Host {
                 // work such as byte cloning, has to be accounted for and
                 // metered in indivial match arms.
                 self.charge_budget(CostType::ValXdrConv, 1)?;
-                match ob {
-                    None => Err(self.err_status(ScHostObjErrorCode::UnknownReference)),
-                    Some(ho) => {
-                        match ho {
-                            HostObject::Vec(vv) => {
-                                // Here covers the cost of space allocating and maneuvering needed to go
-                                // from one structure to the other. The actual conversion work (heavy lifting)
-                                // is covered by `from_host_val`, which is recursive.
-                                self.charge_budget(CostType::ScVecFromHostVec, vv.len() as u64)?;
-                                let sv = vv
-                                    .iter()
-                                    .map(|e| self.from_host_val(*e))
-                                    .collect::<Result<Vec<ScVal>, HostError>>()?;
-                                Ok(ScObject::Vec(ScVec(self.map_err(sv.try_into())?)))
-                            }
-                            HostObject::Map(mm) => {
-                                // Here covers the cost of space allocating and maneuvering needed to go
-                                // from one structure to the other. The actual conversion work (heavy lifting)
-                                // is covered by `from_host_val`, which is recursive.
-                                self.charge_budget(CostType::ScMapFromHostMap, mm.len() as u64)?;
-                                let mut mv = Vec::new();
-                                for (k, v) in mm.iter(self)? {
-                                    let key = self.from_host_val(*k)?;
-                                    let val = self.from_host_val(*v)?;
-                                    mv.push(ScMapEntry { key, val });
-                                }
-                                Ok(ScObject::Map(ScMap(self.map_err(mv.try_into())?)))
-                            }
-                            HostObject::U64(u) => Ok(ScObject::U64(*u)),
-                            HostObject::I64(i) => Ok(ScObject::I64(*i)),
-                            HostObject::U128(u) => Ok(ScObject::U128(Int128Parts {
-                                lo: *u as u64,
-                                hi: (*u >> 64) as u64,
-                            })),
-                            HostObject::I128(u) => {
-                                let u = *u as u128;
-                                Ok(ScObject::I128(Int128Parts {
-                                    lo: u as u64,
-                                    hi: (u >> 64) as u64,
-                                }))
-                            }
-                            HostObject::Bytes(b) => Ok(ScObject::Bytes(
-                                self.map_err(b.metered_clone(&self.0.budget)?.try_into())?,
-                            )),
-                            HostObject::ContractCode(cc) => {
-                                Ok(ScObject::ContractCode(cc.metered_clone(&self.0.budget)?))
-                            }
-                            HostObject::Address(addr) => {
-                                Ok(ScObject::Address(addr.metered_clone(&self.0.budget)?))
-                            }
+                let val = match ob {
+                    None => { return Err(self.err_status(ScHostObjErrorCode::UnknownReference)); }
+                    Some(ho) => match ho {
+                        HostObject::Vec(vv) => {
+                            // Here covers the cost of space allocating and maneuvering needed to go
+                            // from one structure to the other. The actual conversion work (heavy lifting)
+                            // is covered by `from_host_val`, which is recursive.
+                            self.charge_budget(CostType::ScVecFromHostVec, vv.len() as u64)?;
+                            let sv = vv
+                                .iter()
+                                .map(|e| self.from_host_val(*e))
+                                .collect::<Result<Vec<ScVal>,HostError>>()?;
+                            ScVal::Vec(Some(ScVec(self.map_err(sv.try_into())?)))
                         }
-                    }
-                }
+                        HostObject::Map(mm) => {
+                            // Here covers the cost of space allocating and maneuvering needed to go
+                            // from one structure to the other. The actual conversion work (heavy lifting)
+                            // is covered by `from_host_val`, which is recursive.
+                            self.charge_budget(CostType::ScMapFromHostMap, mm.len() as u64)?;
+                            let mut mv = Vec::new();
+                            for (k, v) in mm.iter(self)? {
+                                let key = self.from_host_val(*k)?;
+                                let val = self.from_host_val(*v)?;
+                                mv.push(ScMapEntry { key, val });
+                            }
+                            ScVal::Map(Some(ScMap(self.map_err(mv.try_into())?)))
+                        }
+                        HostObject::U64(u) => ScVal::U64(*u),
+                        HostObject::I64(i) => ScVal::I64(*i),
+                        HostObject::U128(u) => ScVal::U128(Int128Parts {
+                            lo: *u as u64,
+                            hi: (*u >> 64) as u64,
+                        }),
+                        HostObject::I128(u) => {
+                            let u = *u as u128;
+                            ScVal::I128(Int128Parts {
+                                lo: u as u64,
+                                hi: (u >> 64) as u64,
+                            })
+                        }
+                        HostObject::Bytes(b) => ScVal::Bytes(
+                            self.map_err(b.metered_clone(&self.0.budget)?.try_into())?,
+                        ),
+                        HostObject::ContractExecutable(cc) => {
+                            ScVal::ContractExecutable(cc.metered_clone(&self.0.budget)?)
+                        }
+                        HostObject::Address(addr) => {
+                            ScVal::Address(addr.metered_clone(&self.0.budget)?)
+                        }
+                    },
+                };
+                unsafe { Ok(ScValObject::unchecked_from_val(val)) }
             })
         }
     }
 
-    pub(crate) fn to_host_obj(&self, ob: &ScObject) -> Result<Object, HostError> {
+    pub(crate) fn to_host_obj<'a>(&self, ob: &ScValObjRef<'a>) -> Result<Object, HostError> {
         self.charge_budget(CostType::ValXdrConv, 1)?;
-        match ob {
-            ScObject::Vec(v) => {
+        let val: &ScVal = (*ob).into();
+        match val {
+            ScVal::Vec(Some(v)) => {
                 self.charge_budget(CostType::ScVecToHostVec, v.len() as u64)?;
                 let mut vv = Vec::with_capacity(v.len());
                 for e in v.iter() {
@@ -707,7 +707,7 @@ impl Host {
                 }
                 self.add_host_object(HostVec::from_vec(vv)?)
             }
-            ScObject::Map(m) => {
+            ScVal::Map(Some(m)) => {
                 self.charge_budget(CostType::ScMapToHostMap, m.len() as u64)?;
                 let mut mm = Vec::with_capacity(m.len());
                 for pair in m.iter() {
@@ -717,20 +717,35 @@ impl Host {
                 }
                 self.add_host_object(HostMap::from_map(mm, self)?)
             }
-            ScObject::U64(u) => self.add_host_object(*u),
-            ScObject::I64(i) => self.add_host_object(*i),
-            ScObject::U128(u) => self.add_host_object(u.lo as u128 | ((u.hi as u128) << 64)),
-            ScObject::I128(i) => {
+            ScVal::U64(u) => self.add_host_object(*u),
+            ScVal::I64(i) => self.add_host_object(*i),
+            ScVal::U128(u) => self.add_host_object(u.lo as u128 | ((u.hi as u128) << 64)),
+            ScVal::I128(i) => {
                 self.add_host_object((i.lo as u128 | ((i.hi as u128) << 64)) as i128)
             }
-            ScObject::Bytes(b) => {
-                self.add_host_object::<Vec<u8>>(b.as_vec().metered_clone(&self.0.budget)?.into())
+            ScVal::Bytes(b) => {
+                self.add_host_object::<ScBytes>(b.as_vec().metered_clone(&self.0.budget)?.into())
             }
-            ScObject::ContractCode(cc) => self.add_host_object(cc.metered_clone(&self.0.budget)?),
-            ScObject::NonceKey(_) => {
+            ScVal::ContractExecutable(cc) => self.add_host_object(cc.metered_clone(&self.0.budget)?),
+            ScVal::LedgerKeyNonce(_) => {
                 Err(self.err_general("nonce keys aren't allowed to be used directly"))
             }
-            ScObject::Address(addr) => self.add_host_object(addr.metered_clone(&self.0.budget)?),
+            ScVal::Address(addr) => self.add_host_object(addr.metered_clone(&self.0.budget)?),
+
+            // TODO: finish these cases
+            ScVal::Timepoint(_) => todo!(),
+            ScVal::Duration(_) => todo!(),
+            ScVal::U256(_) => todo!(),
+            ScVal::I256(_) => todo!(),
+            ScVal::String(_) => todo!(),
+            ScVal::Symbol(_) => todo!(),
+
+            ScVal::Bool(_) |
+            ScVal::Void |
+            ScVal::Status(_) |
+            ScVal::U32(_) |
+            ScVal::I32(_) |
+            ScVal::LedgerKeyContractExecutable => Err(ScHostObjErrorCode::UnexpectedType.into())
         }
     }
 
@@ -768,7 +783,7 @@ impl Host {
     fn create_contract_with_id(
         &self,
         contract_id: Object,
-        contract_source: ScContractCode,
+        contract_source: ScContractExecutable,
     ) -> Result<(), HostError> {
         let new_contract_id = self.hash_from_obj_input("id_obj", contract_id)?;
         let storage_key =
@@ -784,7 +799,7 @@ impl Host {
         // Make sure the contract code exists. With immutable contracts and
         // without this check it would be possible to accidentally create a
         // contract that never may be invoked (just by providing a bad hash).
-        if let ScContractCode::WasmRef(wasm_hash) = &contract_source {
+        if let ScContractExecutable::WasmRef(wasm_hash) = &contract_source {
             let wasm_storage_key =
                 self.contract_code_ledger_key(wasm_hash.metered_clone(&self.0.budget)?);
             if !self
@@ -822,7 +837,7 @@ impl Host {
 
     fn create_contract_with_id_preimage(
         &self,
-        contract_source: ScContractCode,
+        contract_source: ScContractExecutable,
         id_preimage: HashIdPreimage,
     ) -> Result<Object, HostError> {
         let id_arr: [u8; 32] = self.metered_hash_xdr(&id_preimage)?;
@@ -849,18 +864,18 @@ impl Host {
         let storage_key = self.contract_source_ledger_key(id.metered_clone(&self.0.budget)?);
         match self.retrieve_contract_source_from_storage(&storage_key)? {
             #[cfg(feature = "vm")]
-            ScContractCode::WasmRef(wasm_hash) => {
+            ScContractExecutable::WasmRef(wasm_hash) => {
                 let code_entry = self.retrieve_contract_code_from_storage(wasm_hash)?;
                 let vm = Vm::new(
                     self,
                     id.metered_clone(&self.0.budget)?,
                     code_entry.code.as_slice(),
                 )?;
-                vm.invoke_function_raw(self, SymbolStr::from(func).as_ref(), args)
+                vm.invoke_function_raw(self, SymbolSmallStr::from(func).as_ref(), args)
             }
             #[cfg(not(feature = "vm"))]
-            ScContractCode::WasmRef(_) => Err(self.err_general("could not dispatch")),
-            ScContractCode::Token => self.with_frame(
+            ScContractExecutable::WasmRef(_) => Err(self.err_general("could not dispatch")),
+            ScContractExecutable::Token => self.with_frame(
                 Frame::Token(id.clone(), func.clone(), args.to_vec()),
                 || {
                     use crate::native_contract::{NativeContract, Token};
@@ -1917,7 +1932,7 @@ impl VmCallerEnv for Host {
         let contract_id = self.get_current_contract_id_internal()?;
         let salt = self.uint256_from_obj_input("salt", salt)?;
 
-        let code = ScContractCode::WasmRef(self.hash_from_obj_input("wasm_hash", wasm_hash)?);
+        let code = ScContractExecutable::WasmRef(self.hash_from_obj_input("wasm_hash", wasm_hash)?);
         let id_preimage = self.id_preimage_from_contract(contract_id, salt)?;
         self.create_contract_with_id_preimage(code, id_preimage)
     }

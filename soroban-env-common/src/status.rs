@@ -1,4 +1,8 @@
-use crate::{impl_wrapper_common, BitSetError, ConversionError, RawVal, SymbolError, Tag};
+use crate::{
+    impl_wrapper_as_and_to_rawval, impl_wrapper_tag_based_constructors,
+    impl_wrapper_tag_based_rawvalconvertible, impl_wrapper_wasmi_conversions, ConversionError,
+    RawVal, SymbolError, Tag,
+};
 use core::{
     cmp::Ordering,
     convert::TryFrom,
@@ -19,7 +23,10 @@ use stellar_xdr::{
 #[derive(Copy, Clone)]
 pub struct Status(RawVal);
 
-impl_wrapper_common!(Status);
+impl_wrapper_tag_based_rawvalconvertible!(Status);
+impl_wrapper_tag_based_constructors!(Status);
+impl_wrapper_as_and_to_rawval!(Status);
+impl_wrapper_wasmi_conversions!(Status);
 
 impl Status {
     pub const UNKNOWN_ERROR: Status =
@@ -237,15 +244,6 @@ impl From<ScVmErrorCode> for Status {
     }
 }
 
-impl From<BitSetError> for Status {
-    fn from(bse: BitSetError) -> Self {
-        let s = match bse {
-            BitSetError::TooManyBits(_) => ScHostValErrorCode::BitsetTooManyBits,
-        };
-        ScStatus::HostValueError(s).into()
-    }
-}
-
 impl From<SymbolError> for Status {
     fn from(se: SymbolError) -> Self {
         let s = match se {
@@ -289,8 +287,6 @@ impl Status {
 
     #[inline(always)]
     pub const fn from_type_and_code(ty: ScStatusType, code: u32) -> Status {
-        // Unfortunately we can't use from_major_minor here because
-        // it's not const, and making it const requires nightly.
         unsafe { Self::from_major_minor(code, ty as u32) }
     }
 

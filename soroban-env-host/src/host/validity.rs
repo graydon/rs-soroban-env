@@ -84,36 +84,31 @@ impl Host {
     // Metering: covered by components
     // TODO: the validation is incomplete. Need to further restrict Map, Vec sizes.
     fn validate_topic(&self, topic: RawVal) -> Result<(), HostError> {
-        if topic.is_u63() {
-            Ok(())
-        } else {
-            match topic.get_tag() {
-                Tag::Object => {
-                    unsafe {
-                        self.unchecked_visit_val_obj(topic, |ob| {
-                            match ob {
-                                None => Err(self.err_status(ScHostObjErrorCode::UnknownReference)),
-                                Some(ho) => match ho {
-                                    HostObject::ContractCode(_) => {
-                                        Err(self.err_status(ScHostObjErrorCode::UnexpectedType))
-                                    }
-                                    HostObject::Bytes(b) => {
-                                        if b.len() > TOPIC_BYTES_LENGTH_LIMIT {
-                                            // TODO: use more event-specific error codes than `UnexpectedType`.
-                                            // Something like "topic bytes exceeds length limit"
-                                            Err(self.err_status(ScHostObjErrorCode::UnexpectedType))
-                                        } else {
-                                            Ok(())
-                                        }
-                                    }
-                                    _ => Ok(()),
-                                },
+        if topic.is_object() {
+            unsafe {
+                self.unchecked_visit_val_obj(topic, |ob| {
+                    match ob {
+                        None => Err(self.err_status(ScHostObjErrorCode::UnknownReference)),
+                        Some(ho) => match ho {
+                            HostObject::ContractExecutable(_) => {
+                                Err(self.err_status(ScHostObjErrorCode::UnexpectedType))
                             }
-                        })
+                            HostObject::Bytes(b) => {
+                                if b.len() > TOPIC_BYTES_LENGTH_LIMIT {
+                                    // TODO: use more event-specific error codes than `UnexpectedType`.
+                                    // Something like "topic bytes exceeds length limit"
+                                    Err(self.err_status(ScHostObjErrorCode::UnexpectedType))
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            _ => Ok(()),
+                        },
                     }
-                }
-                _ => Ok(()),
+                })
             }
+        } else {
+            Ok(())
         }
     }
 

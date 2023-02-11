@@ -1,3 +1,5 @@
+use crate::BytesObject;
+
 use super::{call_macro_with_all_host_functions, Env, EnvBase, Object, RawVal, Status, Symbol};
 use core::{any, convert::Infallible};
 
@@ -42,7 +44,7 @@ impl EnvBase for UnimplementedEnv {
         unimplemented!()
     }
 
-    fn bytes_new_from_slice(&self, _mem: &[u8]) -> Result<Object, Self::Error> {
+    fn bytes_new_from_slice(&self, _mem: &[u8]) -> Result<BytesObject, Self::Error> {
         unimplemented!()
     }
 
@@ -73,6 +75,26 @@ impl EnvBase for UnimplementedEnv {
         _vals: &[RawVal],
         _strs: &[&'static str],
     ) -> Result<(), Self::Error> {
+        unimplemented!()
+    }
+
+    fn bytes_new_from_static_slice(&self, _s: &'static [u8]) -> Result<crate::BytesObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn string_new_from_slice<'a>(&self, _s: &'a str) -> Result<crate::StringObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn string_new_from_static_slice(&self, _s: &'static str) -> Result<crate::StringObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn symbol_new_from_slice<'a>(&self, _s: crate::SymbolStr<'a>) -> Result<crate::SymbolObject, Self::Error> {
+        unimplemented!()
+    }
+
+    fn symbol_new_from_static_slice(&self, _s: crate::SymbolStr<'static>) -> Result<crate::SymbolObject, Self::Error> {
         unimplemented!()
     }
 }
