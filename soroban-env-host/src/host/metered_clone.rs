@@ -1,15 +1,19 @@
 use std::rc::Rc;
 
 use soroban_env_common::{
-    xdr::{BytesM, LedgerEntry, LedgerKey, ScAddress, ScMap, ScObject, ScVal},
+    xdr::{BytesM, LedgerEntry, LedgerKey, ScAddress, ScHostValErrorCode, ScMap, ScVal, StringM},
     RawVal,
 };
 
 use crate::{
     budget::{Budget, CostType},
     host::Events,
+    num::{I256, U256},
     storage::AccessType,
-    xdr::{AccountId, Hash, ScContractCode, ScVec, Uint256},
+    xdr::{
+        AccountId, Duration, Hash, ScBytes, ScContractExecutable, ScNonceKey, ScString, ScSymbol,
+        ScVec, TimePoint, Uint256,
+    },
     HostError,
 };
 
@@ -71,14 +75,24 @@ pub trait MeteredClone: Clone {
     }
 }
 
+impl MeteredClone for u64 {}
+impl MeteredClone for i64 {}
+impl MeteredClone for TimePoint {}
+impl MeteredClone for Duration {}
+impl MeteredClone for u128 {}
+impl MeteredClone for i128 {}
+
 impl<T> MeteredClone for Rc<T> {}
 impl MeteredClone for Hash {}
 impl MeteredClone for RawVal {}
 impl MeteredClone for AccessType {}
 impl MeteredClone for AccountId {}
-impl MeteredClone for ScContractCode {}
+impl MeteredClone for ScContractExecutable {}
 impl MeteredClone for Uint256 {}
+impl MeteredClone for U256 {}
+impl MeteredClone for I256 {}
 impl MeteredClone for ScAddress {}
+impl MeteredClone for ScNonceKey {}
 impl<const N: usize> MeteredClone for [u8; N] {}
 
 // TODO: this isn't correct: these two have substructure to account for;
@@ -94,29 +108,30 @@ impl MeteredClone for ScVal {
     fn charge_for_clone(&self, budget: &Budget) -> Result<(), HostError> {
         charge_shallow_copy(1, budget)?;
         match self {
-            ScVal::Object(Some(obj)) => {
-                match obj {
-                    ScObject::Vec(v) => ScVec::charge_for_clone(v, budget),
-                    ScObject::Map(m) => ScMap::charge_for_clone(m, budget),
-                    ScObject::Bytes(b) => BytesM::charge_for_clone(b, budget),
-                    // Everything else was handled by the memcpy above.
-                    ScObject::U64(_)
-                    | ScObject::I64(_)
-                    | ScObject::U128(_)
-                    | ScObject::I128(_)
-                    | ScObject::ContractCode(_)
-                    | ScObject::Address(_)
-                    | ScObject::NonceKey(_) => Ok(()),
-                }
-            }
-            ScVal::Object(None)
-            | ScVal::U63(_)
+            ScVal::Vec(Some(v)) => ScVec::charge_for_clone(v, budget),
+            ScVal::Map(Some(m)) => ScMap::charge_for_clone(m, budget),
+            ScVal::Vec(None) | ScVal::Map(None) => Err(ScHostValErrorCode::MissingObject.into()),
+            ScVal::Bytes(b) => BytesM::charge_for_clone(b, budget),
+            ScVal::String(s) => StringM::charge_for_clone(s, budget),
+            // Everything else was handled by the memcpy above.
+            ScVal::U64(_)
+            | ScVal::I64(_)
+            | ScVal::U128(_)
+            | ScVal::I128(_)
+            | ScVal::ContractExecutable(_)
+            | ScVal::Address(_)
             | ScVal::U32(_)
             | ScVal::I32(_)
-            | ScVal::Static(_)
             | ScVal::Symbol(_)
-            | ScVal::Bitset(_)
-            | ScVal::Status(_) => Ok(()),
+            | ScVal::Status(_)
+            | ScVal::Bool(_)
+            | ScVal::Void
+            | ScVal::Timepoint(_)
+            | ScVal::Duration(_)
+            | ScVal::U256(_)
+            | ScVal::I256(_)
+            | ScVal::LedgerKeyContractExecutable
+            | ScVal::LedgerKeyNonce(_) => Ok(()),
         }
     }
 }
@@ -143,6 +158,42 @@ impl MeteredClone for ScMap {
 }
 
 impl<const C: u32> MeteredClone for BytesM<C> {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_clone(&self, budget: &Budget) -> Result<(), HostError> {
+        charge_shallow_copy(1, budget)?;
+        budget.charge(CostType::BytesClone, self.len() as u64)
+    }
+}
+
+impl MeteredClone for ScBytes {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_clone(&self, budget: &Budget) -> Result<(), HostError> {
+        charge_shallow_copy(1, budget)?;
+        budget.charge(CostType::BytesClone, self.len() as u64)
+    }
+}
+
+impl<const C: u32> MeteredClone for StringM<C> {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_clone(&self, budget: &Budget) -> Result<(), HostError> {
+        charge_shallow_copy(1, budget)?;
+        budget.charge(CostType::BytesClone, self.len() as u64)
+    }
+}
+
+impl MeteredClone for ScString {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_clone(&self, budget: &Budget) -> Result<(), HostError> {
+        charge_shallow_copy(1, budget)?;
+        budget.charge(CostType::BytesClone, self.len() as u64)
+    }
+}
+
+impl MeteredClone for ScSymbol {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_clone(&self, budget: &Budget) -> Result<(), HostError> {

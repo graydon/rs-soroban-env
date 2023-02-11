@@ -44,7 +44,7 @@ fn invoke_cross_contract() -> Result<(), HostError> {
     let args = host.test_vec_obj::<i32>(&[1, 2])?;
     let res = host.call(id_obj, sym.into(), args.into())?;
     assert!(res.is::<i32>());
-    assert!(res.get_tag() == Tag::I32);
+    assert!(res.get_tag() == Tag::I32Val);
     let i: i32 = res.try_into()?;
     assert_eq!(i, 3);
     Ok(())

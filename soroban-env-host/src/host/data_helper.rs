@@ -8,8 +8,8 @@ use crate::xdr::{
     HashIdPreimageContractId, HashIdPreimageCreateContractArgs, HashIdPreimageEd25519ContractId,
     HashIdPreimageFromAsset, HashIdPreimageSourceAccountContractId, LedgerEntry, LedgerEntryData,
     LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData,
-    LedgerKeyTrustLine, PublicKey, ScContractCode, ScHostStorageErrorCode, ScHostValErrorCode,
-    ScObject, ScStatic, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
+    LedgerKeyTrustLine, PublicKey, ScContractExecutable, ScHostStorageErrorCode,
+    ScHostValErrorCode, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
 };
 use crate::{Host, HostError};
 
@@ -20,7 +20,7 @@ impl Host {
     pub fn contract_source_ledger_key(&self, contract_id: Hash) -> LedgerKey {
         LedgerKey::ContractData(LedgerKeyContractData {
             contract_id,
-            key: ScVal::Static(ScStatic::LedgerKeyContractCode),
+            key: ScVal::LedgerKeyContractExecutable,
         })
     }
 
@@ -28,13 +28,13 @@ impl Host {
     pub(crate) fn retrieve_contract_source_from_storage(
         &self,
         key: &LedgerKey,
-    ) -> Result<ScContractCode, HostError> {
+    ) -> Result<ScContractExecutable, HostError> {
         let scval = match self.0.storage.borrow_mut().get(key, self.as_budget())?.data {
             LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val),
             _ => Err(self.err_status(ScHostStorageErrorCode::ExpectContractData)),
         }?;
         match scval {
-            ScVal::Object(Some(ScObject::ContractCode(code))) => Ok(code),
+            ScVal::ContractExecutable(code) => Ok(code),
             _ => {
                 return Err(self.err_status_msg(
                     ScHostValErrorCode::UnexpectedValType,
@@ -68,14 +68,14 @@ impl Host {
     // Notes on metering: `from_host_obj` and `put` to storage covered, rest are free.
     pub(crate) fn store_contract_source(
         &self,
-        contract_source: ScContractCode,
+        contract_source: ScContractExecutable,
         contract_id: Hash,
         key: &LedgerKey,
     ) -> Result<(), HostError> {
         let data = LedgerEntryData::ContractData(ContractDataEntry {
             contract_id,
-            key: ScVal::Static(ScStatic::LedgerKeyContractCode),
-            val: ScVal::Object(Some(ScObject::ContractCode(contract_source))),
+            key: ScVal::LedgerKeyContractExecutable,
+            val: ScVal::ContractExecutable(contract_source),
         });
         self.0.storage.borrow_mut().put(
             &key,
@@ -151,7 +151,7 @@ impl Host {
     // metering: covered by components
     pub fn create_contract_args_hash_preimage(
         &self,
-        source: ScContractCode,
+        source: ScContractExecutable,
         salt: Uint256,
     ) -> Result<HashIdPreimage, HostError> {
         Ok(HashIdPreimage::CreateContractArgs(

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use soroban_env_common::xdr::{
     ContractAuth, ContractDataEntry, HashIdPreimage, HashIdPreimageContractAuth, LedgerEntry,
-    LedgerEntryData, LedgerEntryExt, ScAddress, ScHostAuthErrorCode, ScObject, ScVal,
+    LedgerEntryData, LedgerEntryExt, ScAddress, ScHostAuthErrorCode, ScVal, ScNonceKey, ScSymbol
 };
-use soroban_env_common::{RawVal, Symbol};
+use soroban_env_common::{RawVal};
 
 use crate::budget::Budget;
 use crate::host::metered_clone::MeteredClone;
@@ -117,7 +117,7 @@ struct AuthorizationTracker {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ContractInvocation {
     pub(crate) contract_id: Hash,
-    pub(crate) function_name: Symbol,
+    pub(crate) function_name: ScSymbol,
 }
 
 // A single node in the authorized invocation tree.
@@ -125,7 +125,7 @@ pub(crate) struct ContractInvocation {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct AuthorizedInvocation {
     pub(crate) contract_id: Hash,
-    pub(crate) function_name: Symbol,
+    pub(crate) function_name: ScSymbol,
     pub(crate) args: ScVec,
     pub(crate) sub_invocations: Vec<AuthorizedInvocation>,
     // Indicates that this invocation has been already used in the
@@ -144,7 +144,7 @@ impl AuthorizedInvocation {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             contract_id: xdr_invocation.contract_id.clone(),
-            function_name: Symbol::try_from(xdr_invocation.function_name)?,
+            function_name: xdr_invocation.function_name.clone(),
             args: xdr_invocation.args.clone(),
             sub_invocations,
             is_exhausted: false,
@@ -155,11 +155,7 @@ impl AuthorizedInvocation {
         Ok(xdr::AuthorizedInvocation {
             contract_id: self.contract_id.metered_clone(budget)?,
             // This ideally should be infallible
-            function_name: self
-                .function_name
-                .to_string()
-                .try_into()
-                .map_err(|_| HostError::from(ScUnknownErrorCode::General))?,
+            function_name: self.function_name.clone(),
             args: self.args.metered_clone(budget)?,
             sub_invocations: self
                 .sub_invocations
@@ -171,10 +167,10 @@ impl AuthorizedInvocation {
         })
     }
 
-    fn new_recording(contract_id: &Hash, function_name: Symbol, args: ScVec) -> Self {
+    fn new_recording(contract_id: &Hash, function_name: &ScSymbol, args: ScVec) -> Self {
         Self {
             contract_id: contract_id.clone(),
-            function_name,
+            function_name: function_name.clone(),
             args,
             sub_invocations: vec![],
             is_exhausted: true,
@@ -187,11 +183,7 @@ impl AuthorizedInvocation {
         Ok(xdr::AuthorizedInvocation {
             contract_id: self.contract_id.clone(),
             // This ideally should be infallible
-            function_name: self
-                .function_name
-                .to_string()
-                .try_into()
-                .map_err(|_| HostError::from(ScUnknownErrorCode::General))?,
+            function_name: self.function_name.clone(),
             args: self.args.clone(),
             sub_invocations: self
                 .sub_invocations
@@ -328,7 +320,7 @@ impl AuthorizationManager {
                             match tracker.maybe_authorize_invocation(
                                 host,
                                 &curr_invocation.contract_id,
-                                curr_invocation.function_name,
+                                &curr_invocation.function_name,
                                 &args,
                             ) {
                                 // If tracker doesn't have a matching invocation,
@@ -367,7 +359,7 @@ impl AuthorizationManager {
                             return self.trackers[*tracker_id].record_invocation(
                                 host,
                                 &curr_invocation.contract_id,
-                                curr_invocation.function_name,
+                                &curr_invocation.function_name,
                                 args,
                             );
                         }
@@ -378,7 +370,7 @@ impl AuthorizationManager {
                         host,
                         address,
                         &curr_invocation.contract_id,
-                        curr_invocation.function_name,
+                        &curr_invocation.function_name,
                         args,
                         self.call_stack.len(),
                     )?);
@@ -423,7 +415,7 @@ impl AuthorizationManager {
 
     // Records a new call stack frame.
     // This should be called for every `Host` `push_frame`.
-    pub(crate) fn push_frame(&mut self, frame: &Frame) -> Result<(), HostError> {
+    pub(crate) fn push_frame(&mut self, host: &Host, frame: &Frame) -> Result<(), HostError> {
         let (contract_id, function_name) = match frame {
             #[cfg(feature = "vm")]
             Frame::ContractVM(vm, fn_name, _) => {
@@ -436,6 +428,9 @@ impl AuthorizationManager {
             Frame::Token(id, fn_name, _) => (id.metered_clone(&self.budget)?, fn_name.clone()),
             #[cfg(any(test, feature = "testutils"))]
             Frame::TestContract(tc) => (tc.id.clone(), tc.func.clone()),
+        };
+        let Ok(ScVal::Symbol(function_name)) = host.from_host_val(function_name.to_raw()) else {
+            return Err(host.err_status(xdr::ScHostObjErrorCode::UnexpectedType))
         };
         self.call_stack.push(ContractInvocation {
             contract_id,
@@ -512,7 +507,7 @@ impl AuthorizationManager {
     // Returns the top-level authorizations that have been recorded for the last
     // contract invocation.
     #[cfg(any(test, feature = "testutils"))]
-    pub(crate) fn get_recorded_top_authorizations(&self) -> Vec<(ScAddress, Hash, Symbol, ScVec)> {
+    pub(crate) fn get_recorded_top_authorizations(&self) -> Vec<(ScAddress, Hash, ScSymbol, ScVec)> {
         match self.mode {
             AuthorizationMode::Enforcing => {
                 panic!("get_top_authorizations is only available for recording-mode auth")
@@ -563,7 +558,7 @@ impl AuthorizationTracker {
         host: &Host,
         address: ScAddress,
         contract_id: &Hash,
-        function_name: Symbol,
+        function_name: &ScSymbol,
         args: ScVec,
         current_stack_len: usize,
     ) -> Result<Self, HostError> {
@@ -619,7 +614,7 @@ impl AuthorizationTracker {
         &mut self,
         host: &Host,
         contract_id: &Hash,
-        function_name: Symbol,
+        function_name: &ScSymbol,
         args: &ScVec,
     ) -> Result<bool, HostError> {
         if !self.is_valid {
@@ -658,7 +653,7 @@ impl AuthorizationTracker {
         &mut self,
         host: &Host,
         contract_id: &Hash,
-        function_name: Symbol,
+        function_name: &ScSymbol,
         args: ScVec,
     ) -> Result<(), HostError> {
         let frame_is_already_authorized = match self.invocation_id_in_call_stack.last() {
@@ -755,7 +750,7 @@ impl AuthorizationTracker {
     fn maybe_push_matching_invocation_frame(
         &mut self,
         contract_id: &Hash,
-        function_name: Symbol,
+        function_name: &ScSymbol,
         args: &ScVec,
     ) -> bool {
         let mut frame_index = None;
@@ -764,7 +759,7 @@ impl AuthorizationTracker {
                 let sub_invocation = &mut curr_invocation.sub_invocations[i];
                 if !sub_invocation.is_exhausted
                     && &sub_invocation.contract_id == contract_id
-                    && sub_invocation.function_name == function_name
+                    && &sub_invocation.function_name == function_name
                     && &sub_invocation.args == args
                 {
                     frame_index = Some(i);
@@ -775,7 +770,7 @@ impl AuthorizationTracker {
         } else {
             if !self.root_authorized_invocation.is_exhausted
                 && &self.root_authorized_invocation.contract_id == contract_id
-                && self.root_authorized_invocation.function_name == function_name
+                && &self.root_authorized_invocation.function_name == function_name
                 && &self.root_authorized_invocation.args == args
             {
                 frame_index = Some(0);
@@ -816,6 +811,10 @@ impl AuthorizationTracker {
                 host.with_ledger_info(|li| li.network_id.metered_clone(host.budget_ref()))?,
             ),
             invocation: self.invocation_to_xdr(host.budget_ref())?,
+            nonce: self
+            .nonce
+            .clone()
+            .ok_or_else(|| host.err_general("unexpected missing nonce"))?,
         });
 
         host.metered_hash_xdr(&payload_preimage)
@@ -911,9 +910,11 @@ impl Host {
         contract_id: &Hash,
         address: &ScAddress,
     ) -> Result<u64, HostError> {
-        let nonce_key_scval = ScVal::Object(Some(ScObject::NonceKey(
-            address.metered_clone(self.budget_ref())?,
-        )));
+        let nonce_key_scval = ScVal::LedgerKeyNonce(
+            ScNonceKey {
+                nonce_address: address.metered_clone(self.budget_ref())?,
+            }
+        );
         let nonce_key = self.storage_key_for_contract(
             contract_id.metered_clone(self.budget_ref())?,
             nonce_key_scval.clone(),
@@ -927,7 +928,7 @@ impl Host {
                     }
                 })?;
                 match sc_val {
-                    ScVal::Object(Some(ScObject::U64(val))) => val,
+                    ScVal::U64(val) => val,
                     _ => {
                         return Err(self.err_general("unexpected nonce entry type"));
                     }
@@ -938,7 +939,7 @@ impl Host {
         let data = LedgerEntryData::ContractData(ContractDataEntry {
             contract_id: contract_id.metered_clone(self.budget_ref())?,
             key: nonce_key_scval,
-            val: ScVal::Object(Some(ScObject::U64(curr_nonce + 1))),
+            val: ScVal::U64(curr_nonce + 1),
         });
         let entry = LedgerEntry {
             last_modified_ledger_seq: 0,

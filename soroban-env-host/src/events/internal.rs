@@ -1,9 +1,11 @@
+use soroban_env_common::{BytesObject, VecObject};
+
 use super::{DebugEvent, Events, HostEvent};
 use crate::{
     budget::{AsBudget, Budget},
     host::metered_clone::MeteredClone,
     xdr,
-    xdr::ScObject,
+    xdr::ScVal,
     Host, HostError, MeteredVector, Object, RawVal,
 };
 
@@ -12,15 +14,15 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct InternalContractEvent {
     pub(crate) type_: xdr::ContractEventType,
-    pub(crate) contract_id: Option<Object>,
-    pub(crate) topics: Object,
+    pub(crate) contract_id: Option<BytesObject>,
+    pub(crate) topics: VecObject,
     pub(crate) data: RawVal,
 }
 
 impl InternalContractEvent {
     // Metering: covered by components
     pub fn to_xdr(self, host: &Host) -> Result<xdr::ContractEvent, HostError> {
-        let topics = if let ScObject::Vec(v) = host.from_host_obj(self.topics)? {
+        let topics = if let ScVal::Vec(Some(v)) = host.from_host_obj(self.topics)?.into() {
             Ok(v)
         } else {
             Err(host.err_status(xdr::ScHostObjErrorCode::UnexpectedType))
@@ -67,7 +69,7 @@ impl InternalEventsBuffer {
 
     fn defunct_contract_event(c: &mut InternalContractEvent) -> InternalEvent {
         let ty: RawVal = <i32>::from(c.type_).into();
-        let id: RawVal = c.contract_id.map_or(RawVal::from_void(), |obj| obj.into());
+        let id: RawVal = c.contract_id.map_or(RawVal::VOID.into(), |obj| obj.into());
         let dbg = DebugEvent::new()
             .msg("rolled-back contract event: type {}, id {}, topics {}, data {}")
             .arg(ty)
@@ -107,7 +109,7 @@ impl InternalEventsBuffer {
                     DebugEvent::new()
                         .msg("{} contract events rolled back. Rollback start pos = {}")
                         .arg(RawVal::from(rollback_count))
-                        .arg(host.usize_to_rawval_u32(events)?),
+                        .arg(host.usize_to_rawval_u32(events)?.to_raw()),
                 ),
                 host.as_budget(),
             )?;

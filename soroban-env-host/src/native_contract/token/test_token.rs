@@ -7,7 +7,7 @@ use crate::{
     Host, HostError,
 };
 use soroban_env_common::{
-    xdr::{Asset, ContractId, CreateContractArgs, HostFunction, ScContractCode},
+    xdr::{Asset, ContractId, CreateContractArgs, HostFunction, ScContractExecutable},
     Env, RawVal,
 };
 use soroban_env_common::{Symbol, TryFromVal, TryIntoVal};
@@ -24,7 +24,7 @@ impl<'a> TestToken<'a> {
         let id_obj: RawVal = host
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
                 contract_id: ContractId::Asset(asset),
-                source: ScContractCode::Token,
+                source: ScContractExecutable::Token,
             }))
             .unwrap()
             .try_into_val(host)

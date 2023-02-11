@@ -4,7 +4,7 @@ use crate::{
     xdr::{
         self, ContractId, CreateContractArgs, Hash, HashIdPreimage, HashIdPreimageContractId,
         HashIdPreimageSourceAccountContractId, HostFunction, InstallContractCodeArgs,
-        LedgerEntryData, ScContractCode, ScObject, ScVal, ScVec, Uint256,
+        LedgerEntryData, ScContractExecutable, ScObject, ScVal, ScVec, Uint256,
     },
     Env, Host, LedgerInfo, Symbol,
 };
@@ -22,8 +22,10 @@ fn get_contract_wasm_ref(host: &Host, contract_id: Hash) -> Hash {
 
         match s.get(&storage_key, host.as_budget()).unwrap().data {
             LedgerEntryData::ContractData(cde) => match cde.val {
-                ScVal::Object(Some(ScObject::ContractCode(ScContractCode::WasmRef(h)))) => Ok(h),
-                _ => panic!("expected ScContractCode"),
+                ScVal::Object(Some(ScObject::ContractCode(ScContractExecutable::WasmRef(h)))) => {
+                    Ok(h)
+                }
+                _ => panic!("expected ScContractExecutable"),
             },
             _ => panic!("expected contract data"),
         }
@@ -122,7 +124,7 @@ fn test_create_contract_from_source_account(host: &Host, code: &[u8]) -> Hash {
     let created_id_sc_val = host
         .invoke_function(HostFunction::CreateContract(CreateContractArgs {
             contract_id: ContractId::SourceAccount(Uint256(salt.to_vec().try_into().unwrap())),
-            source: ScContractCode::WasmRef(wasm_id),
+            source: ScContractExecutable::WasmRef(wasm_id),
         }))
         .unwrap();
 

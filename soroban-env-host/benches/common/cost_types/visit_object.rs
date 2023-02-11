@@ -17,7 +17,7 @@ impl HostCostMeasurement for VisitObjectMeasure {
         let mut vec = Vec::with_capacity(size as usize);
         let val = ScVal::Object(Some(ScObject::I64(0)));
         for _ in 0..size {
-            vec.push(host.inject_val(&val).unwrap());
+            vec.push(host.inject_val(&val).try_into().unwrap());
         }
         vec
     }
