@@ -4,10 +4,11 @@ use crate::xdr::{
     ScHostValErrorCode, ScVal, ScVec, Uint256,
 };
 use crate::{
-    budget::CostType, host_object::HostVec, Host, HostError, Object, RawVal,
+    budget::CostType,
     events::{DebugError, CONTRACT_EVENT_TOPICS_LIMIT},
-    host_object::{HostObject},
-    ScValObject,
+    host_object::HostObject,
+    host_object::HostVec,
+    Host, HostError, Object, RawVal, ScValObject,
 };
 use ed25519_dalek::{PublicKey, Signature, SIGNATURE_LENGTH};
 use sha2::{Digest, Sha256};

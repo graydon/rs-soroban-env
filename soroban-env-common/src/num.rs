@@ -1,5 +1,5 @@
 use crate::raw_val::TAG_BITS;
-pub use ethnum::{U256,I256,AsI256,AsU256};
+pub use ethnum::{AsI256, AsU256, I256, U256};
 
 use crate::declare_tag_based_wrapper;
 

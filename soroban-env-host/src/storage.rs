@@ -15,10 +15,13 @@ use crate::budget::Budget;
 use crate::host::metered_clone::MeteredClone;
 use crate::xdr::{LedgerEntry, LedgerKey, ScHostStorageErrorCode};
 use crate::Host;
-use crate::{host::metered_map::MeteredOrdMap, HostError};
+use crate::{
+    host::metered_map::{BudgetContext, MeteredOrdMap},
+    HostError,
+};
 
-pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
-pub type StorageMap = MeteredOrdMap<Rc<LedgerKey>, Option<Rc<LedgerEntry>>, Budget>;
+pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, BudgetContext>;
+pub type StorageMap = MeteredOrdMap<Rc<LedgerKey>, Option<Rc<LedgerEntry>>, BudgetContext>;
 
 /// A helper type used by [Footprint] to designate which ways
 /// a given [LedgerKey] is accessed, or is allowed to be accessed,

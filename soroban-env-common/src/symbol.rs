@@ -1,6 +1,7 @@
 use crate::{
-    declare_tag_based_wrapper, impl_wrapper_as_and_to_rawval, impl_wrapper_tryfroms_and_tryfromvals,
-    impl_wrapper_wasmi_conversions, require, ConversionError, RawVal, RawValConvertible, Tag, TryFromVal, Env, TryIntoVal,
+    declare_tag_based_wrapper, impl_wrapper_as_and_to_rawval,
+    impl_wrapper_tryfroms_and_tryfromvals, impl_wrapper_wasmi_conversions, require,
+    ConversionError, Env, RawVal, RawValConvertible, Tag, TryFromVal, TryIntoVal,
 };
 use core::{
     cmp::Ordering,
@@ -67,14 +68,13 @@ impl_wrapper_as_and_to_rawval!(Symbol);
 impl_wrapper_tryfroms_and_tryfromvals!(Symbol);
 impl_wrapper_wasmi_conversions!(Symbol);
 
-impl<'a, E:Env> TryFromVal<E,SymbolStr<'a>> for Symbol {
+impl<'a, E: Env> TryFromVal<E, SymbolStr<'a>> for Symbol {
     type Error = ConversionError;
 
     fn try_from_val(env: &E, v: &SymbolStr<'a>) -> Result<Self, Self::Error> {
         if let Ok(ss) = SymbolSmall::try_from_str(v.0) {
             Ok(Self(ss.0))
-        }
-        else if let Ok(so) = env.symbol_new_from_slice(*v) {
+        } else if let Ok(so) = env.symbol_new_from_slice(*v) {
             Ok(Self(so.0))
         } else {
             Err(ConversionError)
@@ -82,29 +82,30 @@ impl<'a, E:Env> TryFromVal<E,SymbolStr<'a>> for Symbol {
     }
 }
 
-impl<'a, E:Env> TryFromVal<E,&'a str> for Symbol {
+impl<'a, E: Env> TryFromVal<E, &'a str> for Symbol {
     type Error = ConversionError;
 
     fn try_from_val(env: &E, v: &&'a str) -> Result<Self, Self::Error> {
         let ss = SymbolStr::try_from_str(v).map_err(|_| ConversionError)?;
         ss.try_into_val(env)
     }
-
 }
 
 impl Symbol {
-    pub fn try_from_static<E:Env>(env: &E, v: SymbolStr<'static>) -> Result<Self, ConversionError> {
+    pub fn try_from_static<E: Env>(
+        env: &E,
+        v: SymbolStr<'static>,
+    ) -> Result<Self, ConversionError> {
         if let Ok(ss) = SymbolSmall::try_from_str(v.0) {
             Ok(Self(ss.0))
-        }
-        else if let Ok(so) = env.symbol_new_from_static_slice(v) {
+        } else if let Ok(so) = env.symbol_new_from_static_slice(v) {
             Ok(Self(so.0))
         } else {
             Err(ConversionError)
         }
     }
 
-    pub fn try_from_static_str<E:Env>(env: &E, s: &'static str) -> Result<Self, ConversionError> {
+    pub fn try_from_static_str<E: Env>(env: &E, s: &'static str) -> Result<Self, ConversionError> {
         if let Ok(ss) = SymbolStr::try_from_str(s) {
             Self::try_from_static(env, ss)
         } else {
@@ -115,7 +116,7 @@ impl Symbol {
     pub const fn try_from_small_str(s: &str) -> Result<Self, SymbolError> {
         match SymbolSmall::try_from_str(s) {
             Ok(ss) => Ok(Symbol(ss.0)),
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
 
@@ -264,27 +265,21 @@ impl SymbolSmall {
 /// A wrapper around `&str` that checks that the string's
 /// characters are in the allowed range. Primarily designed
 /// for use with `&'static str`.
-#[derive(Copy,Clone,Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct SymbolStr<'a>(&'a str);
 impl<'a> SymbolStr<'a> {
-
     // We don't use a TryFrom here because we want a const fn.
-    const fn try_from_str(ss: &'a str) -> Result<SymbolStr<'a>, SymbolError>
-    {
+    const fn try_from_str(ss: &'a str) -> Result<SymbolStr<'a>, SymbolError> {
         Self::try_from_bytes(ss.as_bytes())
     }
 
-    const fn try_from_bytes(b: &'a [u8]) -> Result<SymbolStr<'a>, SymbolError>
-    {
+    const fn try_from_bytes(b: &'a [u8]) -> Result<SymbolStr<'a>, SymbolError> {
         let n = b.len();
-        let mut i : usize = 0;
+        let mut i: usize = 0;
         while i < n {
             match b[i] as char {
-                '_' |
-                '0'..='9' |
-                'A'..='Z' |
-                'a'..='z' => (),
-                x => return Err(SymbolError::BadChar(x))
+                '_' | '0'..='9' | 'A'..='Z' | 'a'..='z' => (),
+                x => return Err(SymbolError::BadChar(x)),
             }
             i += 1;
         }

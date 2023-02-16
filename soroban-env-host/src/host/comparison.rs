@@ -6,9 +6,8 @@ use soroban_env_common::{
         DataEntry, Hash, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyAccount,
         LedgerKeyClaimableBalance, LedgerKeyConfigSetting, LedgerKeyContractCode, LedgerKeyData,
         LedgerKeyLiquidityPool, LedgerKeyOffer, LedgerKeyTrustLine, LiquidityPoolEntry, OfferEntry,
-        PublicKey, ScAddress, ScContractExecutable, ScMap, ScVal, ScVec, TrustLineAsset,
-        TrustLineEntry, Uint256,
-        ScStatusType, ScHostValErrorCode,
+        PublicKey, ScAddress, ScContractExecutable, ScHostValErrorCode, ScMap, ScStatusType, ScVal,
+        ScVec, TrustLineAsset, TrustLineEntry, Uint256,
     },
     Compare,
 };
@@ -219,8 +218,9 @@ impl Compare<ScVal> for Budget {
             (Vec(Some(a)), Vec(Some(b))) => self.compare(a, b),
             (Map(Some(a)), Map(Some(b))) => self.compare(a, b),
 
-            (Vec(None), _) | (_, Vec(None)) |
-            (Map(None), _) | (_, Map(None)) => Err(ScHostValErrorCode::MissingObject.into()),
+            (Vec(None), _) | (_, Vec(None)) | (Map(None), _) | (_, Map(None)) => {
+                Err(ScHostValErrorCode::MissingObject.into())
+            }
 
             (Bytes(a), Bytes(b)) => {
                 <Self as Compare<&[u8]>>::compare(self, &a.as_slice(), &b.as_slice())

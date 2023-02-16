@@ -1,12 +1,12 @@
 use core::fmt::Debug;
 
+use crate::Tag;
 use ethnum::{I256, U256};
-use stellar_xdr::{Int128Parts, TimePoint, Duration};
 #[cfg(feature = "std")]
 use stellar_xdr::ScVal;
-use crate::Tag;
+use stellar_xdr::{Duration, Int128Parts, TimePoint};
 
-use crate::{num, object::ScValObjRef, raw_val::ConversionError, Object, SymbolSmall, ScValObject};
+use crate::{num, object::ScValObjRef, raw_val::ConversionError, Object, ScValObject, SymbolSmall};
 #[cfg(feature = "std")]
 use crate::{Status, Symbol};
 

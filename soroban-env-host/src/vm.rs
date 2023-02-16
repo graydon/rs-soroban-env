@@ -16,7 +16,7 @@ use crate::{
     host::{Frame, HostImpl},
     HostError, VmCaller,
 };
-use std::{cell::RefCell, io::Cursor, ops::RangeInclusive, rc::Rc};
+use std::{cell::RefCell, io::Cursor, ops::RangeInclusive, rc::Rc, sync::Arc};
 
 use super::{
     xdr::{Hash, ScVal, ScVec},
@@ -73,7 +73,7 @@ pub struct Vm {
     pub(crate) contract_id: Hash,
     // TODO: consider moving store and possibly module to Host so they can be
     // recycled across calls. Or possibly beyond, to be recycled across txs.
-    module: Module,
+    module: Arc<Module>,
     store: RefCell<Store<Host>>,
     instance: Instance,
     memory: Option<Memory>,
@@ -208,8 +208,10 @@ impl Vm {
         };
 
         let store = RefCell::new(store);
+        let module = Arc::new(module);
         Ok(Rc::new(Self {
             contract_id,
+            // FIXME: in the future, recycle these at a higher level.
             module,
             store,
             instance,

@@ -71,12 +71,14 @@ pub use env_val::{TryFromVal, TryIntoVal};
 pub use unimplemented_env::UnimplementedEnv;
 pub use vmcaller_env::{VmCaller, VmCallerEnv};
 
-pub use invoker::InvokerType;
-pub use object::{Object, ScValObject, ScValObjRef};
-pub use status::Status;
-pub use symbol::{Symbol, SymbolSmall, SymbolObject, SymbolStr, SymbolSmallStr, SymbolSmallIter, SymbolError};
 pub use bytes::BytesObject;
+pub use invoker::InvokerType;
+pub use object::{Object, ScValObjRef, ScValObject};
+pub use status::Status;
 pub use string::StringObject;
+pub use symbol::{
+    Symbol, SymbolError, SymbolObject, SymbolSmall, SymbolSmallIter, SymbolSmallStr, SymbolStr,
+};
 
 #[inline(always)]
 // Awkward: this is a free function rather than a trait call because

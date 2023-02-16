@@ -22,7 +22,9 @@ fn get_contract_wasm_ref(host: &Host, contract_id: Hash) -> Hash {
 
         match s.get(&storage_key, host.as_budget()).unwrap().data {
             LedgerEntryData::ContractData(cde) => match cde.val {
-                ScVal::Object(Some(ScObject::ContractCode(ScContractExecutable::WasmRef(h)))) => Ok(h),
+                ScVal::Object(Some(ScObject::ContractCode(ScContractExecutable::WasmRef(h)))) => {
+                    Ok(h)
+                }
                 _ => panic!("expected ScContractExecutable"),
             },
             _ => panic!("expected contract data"),

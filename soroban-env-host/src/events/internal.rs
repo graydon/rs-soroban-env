@@ -2,7 +2,8 @@ use super::{DebugEvent, Events, HostEvent};
 use crate::{
     budget::{AsBudget, Budget},
     host::metered_clone::MeteredClone,
-    xdr, xdr::ScVal,
+    xdr,
+    xdr::ScVal,
     Host, HostError, MeteredVector, Object, RawVal,
 };
 

@@ -8,8 +8,8 @@ use crate::xdr::{
     HashIdPreimageContractId, HashIdPreimageCreateContractArgs, HashIdPreimageEd25519ContractId,
     HashIdPreimageFromAsset, HashIdPreimageSourceAccountContractId, LedgerEntry, LedgerEntryData,
     LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData,
-    LedgerKeyTrustLine, PublicKey, ScContractExecutable, ScHostStorageErrorCode, ScHostValErrorCode,
-    ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
+    LedgerKeyTrustLine, PublicKey, ScContractExecutable, ScHostStorageErrorCode,
+    ScHostValErrorCode, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
 };
 use crate::{Host, HostError};
 

@@ -3,7 +3,7 @@ use soroban_env_macros::generate_call_macro_with_all_host_functions;
 use crate::symbol::SymbolStr;
 
 use super::Symbol;
-use super::{Object, RawVal, Status, StringObject, BytesObject, SymbolObject};
+use super::{BytesObject, Object, RawVal, Status, StringObject, SymbolObject};
 use core::any;
 
 /// Base trait extended by the [Env](crate::Env) trait, providing various special-case
@@ -93,7 +93,10 @@ pub trait EnvBase: Sized + Clone {
     /// Form a new `Symbol` env object from a slice of client memory.
     fn symbol_new_from_slice<'a>(&self, s: SymbolStr<'a>) -> Result<SymbolObject, Self::Error>;
     /// Form a new `Symbol` env object more efficiently from a static slice of client memory.
-    fn symbol_new_from_static_slice(&self, s: SymbolStr<'static>) -> Result<SymbolObject, Self::Error>;
+    fn symbol_new_from_static_slice(
+        &self,
+        s: SymbolStr<'static>,
+    ) -> Result<SymbolObject, Self::Error>;
 
     // As with the bytes functions above, these take _slices_ with definite
     // lifetimes. The first slice is interpreted as a (very restricted)

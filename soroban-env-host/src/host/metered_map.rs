@@ -6,23 +6,41 @@ use crate::{
     xdr::ScHostFnErrorCode,
     Compare, Host, HostError,
 };
-use std::{borrow::Borrow, cmp::Ordering, marker::PhantomData};
+use std::{borrow::Borrow, cmp::Ordering};
+
+// We could use PhantomData<Host> for this, but that turns out to
+// imply ownership of a value of type Host, and we actually do not
+// want to imply that for the sake of Send+Sync analysis.
+trait ContextType: Default {
+    type Context;
+}
+#[derive(Debug, Default)]
+pub struct HostContext;
+#[derive(Debug, Default)]
+pub struct BudgetContext;
+impl ContextType for HostContext {
+    type Context = Host;
+}
+impl ContextType for BudgetContext {
+    type Context = Budget;
+}
 
 pub struct MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
 {
     pub(crate) map: Vec<(K, V)>,
-    ctx: PhantomData<Ctx>,
+    ctx: Ctx,
 }
 
 impl<K, V, Ctx> Clone for MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
+    Ctx::Context: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -36,7 +54,8 @@ impl<K, V, Ctx> MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
+    Ctx::Context: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
 {
     fn charge_new<B: AsBudget>(&self, size: usize, b: &B) -> Result<(), HostError> {
         b.as_budget().charge(CostType::MapNew, size as u64)
@@ -61,7 +80,8 @@ impl<K, V, Ctx> Default for MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
+    Ctx::Context: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
 {
     fn default() -> Self {
         Self {
@@ -81,9 +101,10 @@ impl<K, V, Ctx> MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
+    Ctx::Context: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
 {
-    pub fn new(ctx: &Ctx) -> Result<Self, HostError> {
+    pub fn new(ctx: &Ctx::Context) -> Result<Self, HostError> {
         ctx.as_budget().charge(CostType::MapNew, 1)?;
         Ok(MeteredOrdMap {
             map: Vec::new(),
@@ -91,7 +112,11 @@ where
         })
     }
 
-    pub fn from_map(map: Vec<(K, V)>, ctx: &Ctx) -> Result<Self, HostError> {
+    pub fn as_slice(&self) -> &[(K, V)] {
+        self.map.as_slice()
+    }
+
+    pub fn from_map(map: Vec<(K, V)>, ctx: &Ctx::Context) -> Result<Self, HostError> {
         // Construction cost already paid for by caller, just check
         // that input has sorted and unique keys.
         let m = MeteredOrdMap {
@@ -117,7 +142,7 @@ where
     // Vec from that iterator with a single allocation-and-copy.
     pub fn from_exact_iter<I: Iterator<Item = (K, V)>>(
         iter: I,
-        ctx: &Ctx,
+        ctx: &Ctx::Context,
     ) -> Result<Self, HostError> {
         if let (_, Some(sz)) = iter.size_hint() {
             ctx.as_budget().charge(CostType::MapNew, sz as u64)?;
@@ -134,7 +159,7 @@ where
         }
     }
 
-    fn find<Q>(&self, key: &Q, ctx: &Ctx) -> Result<Result<usize, usize>, HostError>
+    fn find<Q>(&self, key: &Q, ctx: &Ctx::Context) -> Result<Result<usize, usize>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -161,7 +186,7 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, ctx: &Ctx) -> Result<Self, HostError> {
+    pub fn insert(&self, key: K, value: V, ctx: &Ctx::Context) -> Result<Self, HostError> {
         self.charge_access(1, ctx)?;
         match self.find(&key, ctx)? {
             Ok(replace_pos) => {
@@ -189,7 +214,7 @@ where
         }
     }
 
-    pub fn get<Q>(&self, key: &Q, ctx: &Ctx) -> Result<Option<&V>, HostError>
+    pub fn get<Q>(&self, key: &Q, ctx: &Ctx::Context) -> Result<Option<&V>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -206,7 +231,7 @@ where
     /// Returns a `Some((new_self, val))` pair where `new_self` no longer
     /// contains an entry for `key`, if the key existed, otherwise `None` if
     /// `key` didn't exist (in which case there's no need to clone).
-    pub fn remove<Q>(&self, key: &Q, ctx: &Ctx) -> Result<Option<(Self, V)>, HostError>
+    pub fn remove<Q>(&self, key: &Q, ctx: &Ctx::Context) -> Result<Option<(Self, V)>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -242,7 +267,7 @@ where
         self.map.len()
     }
 
-    pub fn contains_key<Q>(&self, key: &Q, ctx: &Ctx) -> Result<bool, HostError>
+    pub fn contains_key<Q>(&self, key: &Q, ctx: &Ctx::Context) -> Result<bool, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -250,7 +275,7 @@ where
         Ok(self.find(key, ctx)?.is_ok())
     }
 
-    pub fn get_prev<Q>(&self, key: &Q, ctx: &Ctx) -> Result<Option<&(K, V)>, HostError>
+    pub fn get_prev<Q>(&self, key: &Q, ctx: &Ctx::Context) -> Result<Option<&(K, V)>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -267,7 +292,7 @@ where
         }
     }
 
-    pub fn get_next<Q>(&self, key: &Q, ctx: &Ctx) -> Result<Option<&(K, V)>, HostError>
+    pub fn get_next<Q>(&self, key: &Q, ctx: &Ctx::Context) -> Result<Option<&(K, V)>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -282,7 +307,7 @@ where
         }
     }
 
-    pub fn get_min<Q>(&self, ctx: &Ctx) -> Result<Option<&(K, V)>, HostError>
+    pub fn get_min<Q>(&self, ctx: &Ctx::Context) -> Result<Option<&(K, V)>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -291,7 +316,7 @@ where
         Ok(self.map.as_slice().first())
     }
 
-    pub fn get_max<Q>(&self, ctx: &Ctx) -> Result<Option<&(K, V)>, HostError>
+    pub fn get_max<Q>(&self, ctx: &Ctx::Context) -> Result<Option<&(K, V)>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
@@ -300,17 +325,17 @@ where
         Ok(self.map.as_slice().last())
     }
 
-    pub fn keys(&self, ctx: &Ctx) -> Result<impl Iterator<Item = &K>, HostError> {
+    pub fn keys(&self, ctx: &Ctx::Context) -> Result<impl Iterator<Item = &K>, HostError> {
         self.charge_scan(ctx)?;
         Ok(self.map.iter().map(|(k, _)| k))
     }
 
-    pub fn values(&self, ctx: &Ctx) -> Result<impl Iterator<Item = &V>, HostError> {
+    pub fn values(&self, ctx: &Ctx::Context) -> Result<impl Iterator<Item = &V>, HostError> {
         self.charge_scan(ctx)?;
         Ok(self.map.iter().map(|(_, v)| v))
     }
 
-    pub fn iter(&self, ctx: &Ctx) -> Result<impl Iterator<Item = &(K, V)>, HostError> {
+    pub fn iter(&self, ctx: &Ctx::Context) -> Result<impl Iterator<Item = &(K, V)>, HostError> {
         self.charge_scan(ctx)?;
         Ok(self.map.iter())
     }
@@ -320,7 +345,8 @@ impl<K, V, Ctx> MeteredClone for MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
+    Ctx::Context: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
 {
     fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
         self.charge_new(self.map.len(), budget)?;
@@ -328,7 +354,7 @@ where
     }
 }
 
-impl<K, V> Compare<MeteredOrdMap<K, V, Host>> for Host
+impl<K, V> Compare<MeteredOrdMap<K, V, HostContext>> for Host
 where
     K: MeteredClone,
     V: MeteredClone,
@@ -338,8 +364,8 @@ where
 
     fn compare(
         &self,
-        a: &MeteredOrdMap<K, V, Host>,
-        b: &MeteredOrdMap<K, V, Host>,
+        a: &MeteredOrdMap<K, V, HostContext>,
+        b: &MeteredOrdMap<K, V, HostContext>,
     ) -> Result<Ordering, Self::Error> {
         self.as_budget()
             .charge(CostType::MapEntry, a.map.len().min(b.map.len()) as u64)?;
@@ -347,7 +373,7 @@ where
     }
 }
 
-impl<K, V> Compare<MeteredOrdMap<K, V, Budget>> for Budget
+impl<K, V> Compare<MeteredOrdMap<K, V, BudgetContext>> for Budget
 where
     K: MeteredClone,
     V: MeteredClone,
@@ -357,8 +383,8 @@ where
 
     fn compare(
         &self,
-        a: &MeteredOrdMap<K, V, Budget>,
-        b: &MeteredOrdMap<K, V, Budget>,
+        a: &MeteredOrdMap<K, V, BudgetContext>,
+        b: &MeteredOrdMap<K, V, BudgetContext>,
     ) -> Result<Ordering, Self::Error> {
         self.charge(CostType::MapEntry, a.map.len().min(b.map.len()) as u64)?;
         <Self as Compare<Vec<(K, V)>>>::compare(self, &a.map, &b.map)
@@ -369,7 +395,8 @@ impl<'a, K, V, Ctx> IntoIterator for &'a MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
+    Ctx::Context: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
 {
     type Item = &'a (K, V);
     type IntoIter = core::slice::Iter<'a, (K, V)>;
@@ -383,7 +410,8 @@ impl<K, V, Ctx> IntoIterator for MeteredOrdMap<K, V, Ctx>
 where
     K: MeteredClone,
     V: MeteredClone,
-    Ctx: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
+    Ctx: ContextType,
+    Ctx::Context: AsBudget + Compare<K, Error = HostError> + Compare<V, Error = HostError>,
 {
     type Item = (K, V);
     type IntoIter = std::vec::IntoIter<(K, V)>;

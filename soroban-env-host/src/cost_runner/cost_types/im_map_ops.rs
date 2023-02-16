@@ -1,6 +1,9 @@
-use crate::{budget::CostType, cost_runner::CostRunner, Host, MeteredOrdMap, RawVal};
+use crate::{
+    budget::CostType, cost_runner::CostRunner, host::metered_map::HostContext, Host, MeteredOrdMap,
+    RawVal,
+};
 
-type HostMap = MeteredOrdMap<RawVal, RawVal, Host>;
+type HostMap = MeteredOrdMap<RawVal, RawVal, HostContext>;
 
 pub struct ImMapNewRun;
 impl CostRunner for ImMapNewRun {

@@ -52,6 +52,10 @@ where
         Self::from_vec(buf.into())
     }
 
+    pub fn as_slice(&self) -> &[A] {
+        self.vec.as_slice()
+    }
+
     pub fn from_vec(vec: Vec<A>) -> Result<Self, HostError> {
         // No charge here: vector already allocated, charge happened in caller.
         Ok(Self { vec })

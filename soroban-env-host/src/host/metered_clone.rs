@@ -1,17 +1,21 @@
 use std::rc::Rc;
 
 use soroban_env_common::{
-    xdr::{BytesM, LedgerEntry, LedgerKey, ScAddress, ScMap, ScVal, ScHostValErrorCode, StringM},
+    xdr::{BytesM, LedgerEntry, LedgerKey, ScAddress, ScHostValErrorCode, ScMap, ScVal, StringM},
     RawVal,
 };
 
 use crate::{
     budget::{Budget, CostType},
     host::Events,
+    host_object::ScNonceKey,
+    num::{I256, U256},
     storage::AccessType,
-    xdr::{AccountId, Hash, ScContractExecutable, ScVec, Uint256, TimePoint, Duration, ScBytes, ScString, ScSymbol},
-    num::{U256,I256},
-    HostError, host_object::ScNonceKey,
+    xdr::{
+        AccountId, Duration, Hash, ScBytes, ScContractExecutable, ScString, ScSymbol, ScVec,
+        TimePoint, Uint256,
+    },
+    HostError,
 };
 
 // Charge for an N-element "shallow copy" of some type, not cloning any
@@ -123,7 +127,7 @@ impl MeteredClone for ScVal {
             | ScVal::U256(_)
             | ScVal::I256(_)
             | ScVal::LedgerKeyContractExecutable
-            | ScVal::LedgerKeyNonce(_) => Ok(())
+            | ScVal::LedgerKeyNonce(_) => Ok(()),
         }
     }
 }

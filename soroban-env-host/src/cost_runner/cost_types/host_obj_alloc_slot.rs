@@ -1,4 +1,4 @@
-use soroban_env_common::xdr::{ScBytes, BytesM};
+use soroban_env_common::xdr::{BytesM, ScBytes};
 
 use crate::{budget::CostType, cost_runner::CostRunner};
 
@@ -12,6 +12,7 @@ impl CostRunner for HostObjAllocSlotRun {
         // When measuring, we just inject a single copy to see what
         // the cost of "one more" is at the given size.
         // host.to_host_obj(sample).unwrap();
-        host.add_host_object(ScBytes(BytesM::try_from(sample).unwrap())).unwrap();
+        host.add_host_object(ScBytes(BytesM::try_from(sample).unwrap()))
+            .unwrap();
     }
 }

@@ -1,9 +1,9 @@
-use std::{error::Error, io::Write};
 use crate::{
     budget::CostType,
-    xdr::{ReadXdr, WriteXdr, ScBytes},
+    xdr::{ReadXdr, ScBytes, WriteXdr},
     Host, HostError, Object,
 };
+use std::{error::Error, io::Write};
 
 use sha2::{Digest, Sha256};
 

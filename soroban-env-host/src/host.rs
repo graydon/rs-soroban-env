@@ -11,11 +11,12 @@ use soroban_env_common::{
         AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEventType, ContractId,
         CreateContractArgs, ExtensionPoint, Hash, HashIdPreimage, HostFunction, HostFunctionType,
         InstallContractCodeArgs, Int128Parts, LedgerEntryData, LedgerKey, LedgerKeyContractCode,
-        ScAddress, ScContractExecutable, ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode,
-        ScHostStorageErrorCode, ScHostValErrorCode, ScMap, ScMapEntry, ScStatusType,
-        ScUnknownErrorCode, ScVal, ScVec, ScBytes, ScSymbol, ScString
+        ScAddress, ScBytes, ScContractExecutable, ScHostContextErrorCode, ScHostFnErrorCode,
+        ScHostObjErrorCode, ScHostStorageErrorCode, ScHostValErrorCode, ScMap, ScMapEntry,
+        ScStatusType, ScString, ScSymbol, ScUnknownErrorCode, ScVal, ScVec,
     },
-    Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller, VmCallerEnv, ScValObject, ScValObjRef, SymbolSmall
+    Convert, InvokerType, ScValObjRef, ScValObject, Status, SymbolSmall, TryFromVal, TryIntoVal,
+    VmCaller, VmCallerEnv,
 };
 
 use crate::auth::{AuthorizationManager, AuthorizationManagerSnapshot, RecordedAuthPayload};
@@ -640,17 +641,20 @@ impl Host {
                 // metered in indivial match arms.
                 self.charge_budget(CostType::ValXdrConv, 1)?;
                 let val = match ob {
-                    None => { return Err(self.err_status(ScHostObjErrorCode::UnknownReference)); }
+                    None => {
+                        return Err(self.err_status(ScHostObjErrorCode::UnknownReference));
+                    }
                     Some(ho) => match ho {
                         HostObject::Vec(vv) => {
                             // Here covers the cost of space allocating and maneuvering needed to go
                             // from one structure to the other. The actual conversion work (heavy lifting)
                             // is covered by `from_host_val`, which is recursive.
                             self.charge_budget(CostType::ScVecFromHostVec, vv.len() as u64)?;
-                            let sv = vv
-                                .iter()
-                                .map(|e| self.from_host_val(*e))
-                                .collect::<Result<Vec<ScVal>,HostError>>()?;
+                            let sv = vv.iter().map(|e| self.from_host_val(*e)).collect::<Result<
+                                Vec<ScVal>,
+                                HostError,
+                            >>(
+                            )?;
                             ScVal::Vec(Some(ScVec(self.map_err(sv.try_into())?)))
                         }
                         HostObject::Map(mm) => {
@@ -679,9 +683,9 @@ impl Host {
                                 hi: (u >> 64) as u64,
                             })
                         }
-                        HostObject::Bytes(b) => ScVal::Bytes(
-                            self.map_err(b.metered_clone(&self.0.budget)?.try_into())?,
-                        ),
+                        HostObject::Bytes(b) => {
+                            ScVal::Bytes(self.map_err(b.metered_clone(&self.0.budget)?.try_into())?)
+                        }
                         HostObject::ContractExecutable(cc) => {
                             ScVal::ContractExecutable(cc.metered_clone(&self.0.budget)?)
                         }
@@ -720,13 +724,13 @@ impl Host {
             ScVal::U64(u) => self.add_host_object(*u),
             ScVal::I64(i) => self.add_host_object(*i),
             ScVal::U128(u) => self.add_host_object(u.lo as u128 | ((u.hi as u128) << 64)),
-            ScVal::I128(i) => {
-                self.add_host_object((i.lo as u128 | ((i.hi as u128) << 64)) as i128)
-            }
+            ScVal::I128(i) => self.add_host_object((i.lo as u128 | ((i.hi as u128) << 64)) as i128),
             ScVal::Bytes(b) => {
                 self.add_host_object::<ScBytes>(b.as_vec().metered_clone(&self.0.budget)?.into())
             }
-            ScVal::ContractExecutable(cc) => self.add_host_object(cc.metered_clone(&self.0.budget)?),
+            ScVal::ContractExecutable(cc) => {
+                self.add_host_object(cc.metered_clone(&self.0.budget)?)
+            }
             ScVal::LedgerKeyNonce(_) => {
                 Err(self.err_general("nonce keys aren't allowed to be used directly"))
             }
@@ -740,12 +744,12 @@ impl Host {
             ScVal::String(_) => todo!(),
             ScVal::Symbol(_) => todo!(),
 
-            ScVal::Bool(_) |
-            ScVal::Void |
-            ScVal::Status(_) |
-            ScVal::U32(_) |
-            ScVal::I32(_) |
-            ScVal::LedgerKeyContractExecutable => Err(ScHostObjErrorCode::UnexpectedType.into())
+            ScVal::Bool(_)
+            | ScVal::Void
+            | ScVal::Status(_)
+            | ScVal::U32(_)
+            | ScVal::I32(_)
+            | ScVal::LedgerKeyContractExecutable => Err(ScHostObjErrorCode::UnexpectedType.into()),
         }
     }
 

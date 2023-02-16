@@ -5,7 +5,7 @@ use crate::{
 };
 use core::fmt::Debug;
 use ethnum::{I256, U256};
-use stellar_xdr::{ScVal, TimePoint, Duration};
+use stellar_xdr::{Duration, ScVal, TimePoint};
 
 /// Wrapper for a [RawVal] that is tagged with one of the object types,
 /// interpreting the [RawVal]'s body as containing a 32-bit object-code handle
@@ -86,10 +86,9 @@ impl Into<ScVal> for ScValObject {
 }
 
 impl ScValObject {
-
     /// Inspect the provided `value` and return `Ok(ScValObject(value))` if it
     /// is a value that should be represented as an object, else `Err(value)`.
-    pub fn classify(value: ScVal) -> Result<ScValObject,ScVal> {
+    pub fn classify(value: ScVal) -> Result<ScValObject, ScVal> {
         if let Some(_) = ScValObjRef::classify(&value) {
             Ok(ScValObject(value))
         } else {
