@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::{
     auth::{AuthorizationManager, RecordedAuthPayload},
     budget::{AsBudget, Budget},
-    events::{diagnostic::DiagnosticLevel, DebugEvent, Events, InternalEventsBuffer},
+    events::{diagnostic::DiagnosticLevel, Events, InternalEventsBuffer},
     host_object::{HostMap, HostObject, HostVec},
     num::{i256_from_pieces, i256_into_pieces, u256_from_pieces, u256_into_pieces},
     storage::Storage,
@@ -15,11 +15,10 @@ use crate::{
         int128_helpers, AccountId, Asset, ContractCodeEntry, ContractCostType, ContractDataEntry,
         ContractEventType, ContractId, CreateContractArgs, ExtensionPoint, Hash, HashIdPreimage,
         LedgerEntryData, LedgerKey, LedgerKeyContractCode, PublicKey, ScAddress, ScBytes,
-        ScContractExecutable, ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode,
-        ScHostValErrorCode, ScStatusType, ScString, ScSymbol, ScUnknownErrorCode, ScVal,
+        ScContractExecutable, ScErrorType, ScString, ScSymbol, ScVal,
         UploadContractWasmArgs,
     },
-    AddressObject, Bool, BytesObject, I128Object, I256Object, I64Object, MapObject, Status,
+    AddressObject, Bool, BytesObject, I128Object, I256Object, I64Object, MapObject, Error,
     StringObject, SymbolObject, SymbolSmall, SymbolStr, TryFromVal, U128Object, U256Object, U32Val,
     U64Object, U64Val, VecObject, VmCaller, VmCallerEnv, Void, I256, U256,
 };
@@ -241,7 +240,7 @@ impl Host {
                 let budget = host_impl.budget;
                 (storage, budget, events)
             })
-            .map_err(|e| (Host(e), ScUnknownErrorCode::General.into()))
+            .map_err(|e| (Host(e), Error::UNKNOWN.into()))
     }
 
     /// Invokes the reserved `__check_auth` function on a provided contract.
@@ -588,12 +587,12 @@ impl EnvBase for Host {
     //
     // When such a "rejected error" occurs, we do panic, but only after checking
     // to see if we're in a `TestContract` invocation, and if so storing the
-    // error's Status value in that frame, such that `Host::call_n` above can
-    // recover the Status when it _catches_ the panic and converts it back to an
+    // error's Error value in that frame, such that `Host::call_n` above can
+    // recover the Error when it _catches_ the panic and converts it back to an
     // error.
     //
     // It might seem like we ought to `std::panic::panic_any(e)` here, making
-    // the panic carry a `HostError` or `Status` and catching it by dynamic type
+    // the panic carry a `HostError` or `Error` and catching it by dynamic type
     // inspection in the `call_n` catch logic. The reason we don't do so is that
     // `panic_any` will not provide a nice printable value to the `PanicInfo`,
     // it constructs, so when/if the panic makes it to a top-level printout it
@@ -1165,7 +1164,7 @@ impl VmCallerEnv for Host {
             if let Some((pk, _)) = hm.get_prev(&k, self)? {
                 Ok(*pk)
             } else {
-                Ok(Status::UNKNOWN_ERROR.to_raw())
+                Ok(Error::UNKNOWN.to_raw())
             }
         })
     }
@@ -1180,7 +1179,7 @@ impl VmCallerEnv for Host {
             if let Some((pk, _)) = hm.get_next(&k, self)? {
                 Ok(*pk)
             } else {
-                Ok(Status::UNKNOWN_ERROR.to_raw())
+                Ok(Error::UNKNOWN.to_raw())
             }
         })
     }
@@ -1193,7 +1192,7 @@ impl VmCallerEnv for Host {
         self.visit_obj(m, |hm: &HostMap| {
             match hm.get_min(self)? {
                 Some((pk, pv)) => Ok(*pk),
-                None => Ok(Status::UNKNOWN_ERROR.to_raw()), //FIXME: replace with the actual status code
+                None => Ok(Error::UNKNOWN.to_raw()), //FIXME: replace with the actual status code
             }
         })
     }
@@ -1206,7 +1205,7 @@ impl VmCallerEnv for Host {
         self.visit_obj(m, |hm: &HostMap| {
             match hm.get_max(self)? {
                 Some((pk, pv)) => Ok(*pk),
-                None => Ok(Status::UNKNOWN_ERROR.to_raw()), //FIXME: replace with the actual status code
+                None => Ok(Error::UNKNOWN.to_raw()), //FIXME: replace with the actual status code
             }
         })
     }
@@ -2173,9 +2172,9 @@ impl VmCallerEnv for Host {
     fn fail_with_status(
         &self,
         vmcaller: &mut VmCaller<Self::VmUserState>,
-        status: Status,
+        status: Error,
     ) -> Result<Void, Self::Error> {
-        if status.is_type(ScStatusType::ContractError) {
+        if status.is_type(ScErrorType::ContractError) {
             Err(self.err_status_msg(status, "failing with contract error status code '{}'"))
         } else {
             Err(self.err_status_msg(

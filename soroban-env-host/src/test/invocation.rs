@@ -6,8 +6,8 @@ use soroban_env_common::{
 use crate::{
     events::{DebugArg, Event},
     vm::Vm,
-    xdr::{Hash, ScHostObjErrorCode, ScStatusType, ScVal, ScVec},
-    Env, Host, HostError, Status, Symbol, Tag,
+    xdr::{Hash, ScHostObjErrorCode, ScErrorType, ScVal, ScVec},
+    Env, Host, HostError, Error, Symbol, Tag,
 };
 use soroban_test_wasms::{ADD_I32, INVOKE_CONTRACT, VEC};
 
@@ -74,7 +74,7 @@ fn invoke_cross_contract_with_err() -> Result<(), HostError> {
     // try_call
     let sv = host.try_call(id_obj, sym, args)?;
     let code = ScHostObjErrorCode::VecIndexOutOfBound;
-    let exp_st: Status = code.into();
+    let exp_st: Error = code.into();
     assert_eq!(sv.get_payload(), exp_st.to_raw().get_payload());
 
     let events = host.get_events()?.0;
@@ -88,11 +88,11 @@ fn invoke_cross_contract_with_err() -> Result<(), HostError> {
             );
             assert_eq!(de.args.len(), 1);
             if let DebugArg::Val(rv) = de.args[0] {
-                let status: Status = rv.try_into()?;
+                let status: Error = rv.try_into()?;
                 assert_eq!(
                     status,
-                    Status::from_type_and_code(
-                        ScStatusType::HostObjectError,
+                    Error::from_type_and_code(
+                        ScErrorType::HostObjectError,
                         ScHostObjErrorCode::VecIndexOutOfBound as u32,
                     )
                 );
@@ -120,11 +120,11 @@ fn invoke_cross_contract_with_err() -> Result<(), HostError> {
             );
             assert_eq!(de.args.len(), 1);
             if let DebugArg::Val(rv) = de.args[0] {
-                let status: Status = rv.try_into()?;
+                let status: Error = rv.try_into()?;
                 assert_eq!(
                     status,
-                    Status::from_type_and_code(
-                        ScStatusType::HostObjectError,
+                    Error::from_type_and_code(
+                        ScErrorType::HostObjectError,
                         ScHostObjErrorCode::VecIndexOutOfBound as u32,
                     )
                 );
@@ -168,7 +168,7 @@ fn invoke_cross_contract_indirect_err() -> Result<(), HostError> {
     // try call -- add will trap, and add_with will trap, but we will get a status
     let status = host.try_call(id0_obj, sym, args)?;
     let code = ScVmErrorCode::TrapUnreachable;
-    let exp: Status = code.into();
+    let exp: Error = code.into();
     assert_eq!(status.get_payload(), exp.to_raw().get_payload());
 
     let events = host.get_events()?.0;
@@ -182,11 +182,11 @@ fn invoke_cross_contract_indirect_err() -> Result<(), HostError> {
             );
             assert_eq!(de.args.len(), 1);
             if let DebugArg::Val(rv) = de.args[0] {
-                let status: Status = rv.try_into()?;
+                let status: Error = rv.try_into()?;
                 assert_eq!(
                     status,
-                    Status::from_type_and_code(
-                        ScStatusType::VmError,
+                    Error::from_type_and_code(
+                        ScErrorType::VmError,
                         ScVmErrorCode::TrapUnreachable as u32,
                     )
                 );
@@ -214,11 +214,11 @@ fn invoke_cross_contract_indirect_err() -> Result<(), HostError> {
             );
             assert_eq!(de.args.len(), 1);
             if let DebugArg::Val(rv) = de.args[0] {
-                let status: Status = rv.try_into()?;
+                let status: Error = rv.try_into()?;
                 assert_eq!(
                     status,
-                    Status::from_type_and_code(
-                        ScStatusType::VmError,
+                    Error::from_type_and_code(
+                        ScErrorType::VmError,
                         ScVmErrorCode::TrapUnreachable as u32,
                     )
                 );
@@ -247,7 +247,7 @@ fn invoke_contract_with_reentry() -> Result<(), HostError> {
     let res = host.call(id0_obj, sym, args);
     let status = host.try_call(id0_obj, sym, args)?;
     let code = ScHostContextErrorCode::UnknownError;
-    let exp: Status = code.into();
+    let exp: Error = code.into();
     assert!(HostError::result_matches_err_status(res, code));
     assert_eq!(status.get_payload(), exp.to_raw().get_payload());
 

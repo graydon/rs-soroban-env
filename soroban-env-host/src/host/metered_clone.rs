@@ -20,7 +20,7 @@ use crate::{
     AddressObject, Bool, BytesObject, ContractExecutableObject, DurationObject, DurationSmall,
     DurationVal, HostError, I128Object, I128Small, I128Val, I256Object, I256Small, I256Val, I32Val,
     I64Object, I64Small, I64Val, LedgerKeyNonceObject, MapObject, Object, RawVal, ScValObject,
-    Status, StringObject, Symbol, SymbolObject, SymbolSmall, SymbolSmallIter, SymbolStr,
+    Error, StringObject, Symbol, SymbolObject, SymbolSmall, SymbolSmallIter, SymbolStr,
     TimepointObject, TimepointSmall, TimepointVal, U128Object, U128Small, U128Val, U256Object,
     U256Small, U256Val, U32Val, U64Object, U64Small, U64Val, VecObject, Void, I256, U256,
 };
@@ -171,7 +171,7 @@ impl MeteredClone for I256Val {}
 impl MeteredClone for I256Small {}
 impl MeteredClone for I256Object {}
 impl MeteredClone for Object {}
-impl MeteredClone for Status {}
+impl MeteredClone for Error {}
 impl MeteredClone for StringObject {}
 impl MeteredClone for Symbol {}
 impl MeteredClone for SymbolSmall {}
@@ -251,7 +251,7 @@ impl MeteredClone for ScVal {
             | ScVal::Address(_)
             | ScVal::U32(_)
             | ScVal::I32(_)
-            | ScVal::Status(_)
+            | ScVal::Error(_)
             | ScVal::Bool(_)
             | ScVal::Void
             | ScVal::Timepoint(_)

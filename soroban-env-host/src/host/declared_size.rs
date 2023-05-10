@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    events::{DebugArg, DebugEvent, HostEvent, InternalContractEvent, InternalEvent},
+    events::{HostEvent, InternalContractEvent, InternalEvent},
     host::Events,
     host_object::HostObject,
     storage::AccessType,
@@ -16,7 +16,7 @@ use crate::{
     },
     AddressObject, Bool, BytesObject, ContractExecutableObject, DurationObject, DurationSmall,
     DurationVal, I128Object, I128Small, I128Val, I256Object, I256Small, I256Val, I32Val, I64Object,
-    I64Small, I64Val, LedgerKeyNonceObject, MapObject, Object, RawVal, ScValObject, Status,
+    I64Small, I64Val, LedgerKeyNonceObject, MapObject, Object, RawVal, ScValObject, Error,
     StringObject, Symbol, SymbolObject, SymbolSmall, SymbolSmallIter, SymbolStr, TimepointObject,
     TimepointSmall, TimepointVal, U128Object, U128Small, U128Val, U256Object, U256Small, U256Val,
     U32Val, U64Object, U64Small, U64Val, VecObject, Void, I256, U256,
@@ -84,7 +84,7 @@ impl_declared_size_type!(I256Val, 8);
 impl_declared_size_type!(I256Small, 8);
 impl_declared_size_type!(I256Object, 8);
 impl_declared_size_type!(Object, 8);
-impl_declared_size_type!(Status, 8);
+impl_declared_size_type!(Error, 8);
 impl_declared_size_type!(StringObject, 8);
 impl_declared_size_type!(Symbol, 8);
 impl_declared_size_type!(SymbolSmall, 8);
@@ -129,9 +129,7 @@ impl_declared_size_type!(LiquidityPoolEntry, 160);
 impl_declared_size_type!(ContractCodeEntry, 56);
 impl_declared_size_type!(ConfigSettingEntry, 104);
 impl_declared_size_type!(AccessType, 1);
-impl_declared_size_type!(DebugArg, 16);
 impl_declared_size_type!(InternalContractEvent, 40);
-impl_declared_size_type!(DebugEvent, 80);
 impl_declared_size_type!(ContractEvent, 104);
 impl_declared_size_type!(HostEvent, 120);
 impl_declared_size_type!(Events, 24);
@@ -247,7 +245,7 @@ mod test {
         expect!["8"].assert_eq(size_of::<I256Small>().to_string().as_str());
         expect!["8"].assert_eq(size_of::<I256Object>().to_string().as_str());
         expect!["8"].assert_eq(size_of::<Object>().to_string().as_str());
-        expect!["8"].assert_eq(size_of::<Status>().to_string().as_str());
+        expect!["8"].assert_eq(size_of::<Error>().to_string().as_str());
         expect!["8"].assert_eq(size_of::<StringObject>().to_string().as_str());
         expect!["8"].assert_eq(size_of::<Symbol>().to_string().as_str());
         expect!["8"].assert_eq(size_of::<SymbolSmall>().to_string().as_str());
@@ -376,7 +374,7 @@ mod test {
         assert_mem_size_le_declared_size!(I256Small);
         assert_mem_size_le_declared_size!(I256Object);
         assert_mem_size_le_declared_size!(Object);
-        assert_mem_size_le_declared_size!(Status);
+        assert_mem_size_le_declared_size!(Error);
         assert_mem_size_le_declared_size!(StringObject);
         assert_mem_size_le_declared_size!(Symbol);
         assert_mem_size_le_declared_size!(SymbolSmall);

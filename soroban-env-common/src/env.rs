@@ -3,7 +3,7 @@ use soroban_env_macros::generate_call_macro_with_all_host_functions;
 use super::Symbol;
 use super::{
     AddressObject, Bool, BytesObject, I128Object, I256Object, I64Object, MapObject, Object, RawVal,
-    Status, StringObject, SymbolObject, U128Object, U256Object, U32Val, U64Object, U64Val,
+    Error, StringObject, SymbolObject, U128Object, U256Object, U32Val, U64Object, U64Val,
     VecObject, Void,
 };
 use core::any;
@@ -28,9 +28,9 @@ pub trait EnvBase: Sized + Clone {
     /// conversion routines for each (as was attempted in earlier iterations).
     ///
     /// This type is _not_ the same as an error intended to make it to the
-    /// user-facing API: user-facing errors should return `Ok(Status)` at the
+    /// user-facing API: user-facing errors should return `Ok(Error)` at the
     /// environment-interface level, and then either directly handle or escalate
-    /// the contained `Status` code to the user as a `Status` or `Result<>` of
+    /// the contained `Error` code to the user as a `Error` or `Result<>` of
     /// some other type, depending on the API.
     type Error: core::fmt::Debug;
 

@@ -23,7 +23,7 @@ use soroban_env_common::{
     xdr::{self, AccountFlags, ScAddress, ScVal, ScVec},
     xdr::{
         AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, Hash, HostFunctionType,
-        LedgerEntryData, LedgerKey, Liabilities, PublicKey, ScHostAuthErrorCode, ScStatusType,
+        LedgerEntryData, LedgerKey, Liabilities, PublicKey, ScHostAuthErrorCode, ScErrorType,
         TrustLineEntry, TrustLineEntryExt, TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
     },
     EnvBase, RawVal,
@@ -297,7 +297,7 @@ impl TokenTest {
 }
 
 fn to_contract_err(e: HostError) -> ContractError {
-    assert!(e.status.is_type(ScStatusType::ContractError));
+    assert!(e.status.is_type(ScErrorType::ContractError));
     num_traits::FromPrimitive::from_u32(e.status.get_code()).unwrap()
 }
 

@@ -1,12 +1,14 @@
+use std::str::FromStr;
+
 use soroban_env_common::{
-    xdr::{ContractEventType, Hash, ScBytes},
-    BytesObject, EnvBase, Symbol, SymbolSmall, VecObject,
+    xdr::{ContractEventType, Hash, ScBytes, ScString, StringM},
+    BytesObject, EnvBase, Symbol, SymbolSmall, VecObject, Error,
 };
 
 use crate::host_object::HostVec;
 use crate::{budget::AsBudget, host::Frame, Host, HostError, RawVal};
 
-use super::{InternalContractEvent, InternalEvent};
+use super::{InternalContractEvent, InternalEvent, InternalEventsBuffer};
 
 #[derive(Clone, Default)]
 pub enum DiagnosticLevel {
@@ -36,7 +38,7 @@ impl Host {
         Ok(())
     }
 
-    fn record_system_debug_contract_event(
+    pub(crate) fn record_system_debug_contract_event(
         &self,
         type_: ContractEventType,
         contract_id: Option<BytesObject>,
@@ -65,6 +67,45 @@ impl Host {
             None => Ok(None),
         })
     }
+
+    fn current_contract_bytesobject_option(&self) -> Result<Option<BytesObject>, HostError>
+    {
+        if let Some(calling_hash) = self.get_current_contract_id_unmetered()? {
+            Ok(Some(self.hash_to_bytesobj(&calling_hash)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn err_diagnostics(
+        &self,
+        events: &mut InternalEventsBuffer,
+        error: Error,
+        msg: &str,
+        args: &[RawVal]
+    ) -> Result<(), HostError>
+    {
+        const ERROR_SYM: SymbolSmall = SymbolSmall::try_from_str("error").unwrap();
+
+        if !self.is_debug() {
+            return Ok(());
+        }
+
+        self.as_budget().with_free_budget(|| {
+            let type_ = ContractEventType::Diagnostic;
+            let contract_id = self.current_contract_bytesobject_option()?;
+            let topics: Vec<RawVal> = vec![ERROR_SYM.to_raw(), error.to_raw()];
+            let topics = self.add_host_object(HostVec::from_vec(topics)?)?;
+            let msg = self.add_host_object(ScString(StringM::from_str(msg)?))?;
+            let data = std::iter::once(msg.to_raw())
+                .chain(args.iter().cloned());
+            let data = self.add_host_object(HostVec::from_exact_iter(data, self.as_budget())?)?.to_raw();
+
+            let ce = InternalContractEvent { type_, contract_id, topics, data };
+            events.record(InternalEvent::StructuredDebug(ce), self.as_budget())
+        })
+    }
+
     // Emits an event with topic = ["fn_call", called_contract_id, function_name] and
     // data = [arg1, args2, ...]
     // Should called prior to opening a frame for the next call so the calling contract can be inferred correctly
@@ -78,10 +119,7 @@ impl Host {
             return Ok(());
         }
 
-        let mut calling_contract: Option<BytesObject> = None;
-        if let Some(calling_hash) = self.get_current_contract_id_unmetered()? {
-            calling_contract = Some(self.hash_to_bytesobj(&calling_hash)?);
-        }
+        let calling_contract = self.current_contract_bytesobject_option()?;
 
         self.as_budget().with_free_budget(|| {
             let topics: Vec<RawVal> = vec![

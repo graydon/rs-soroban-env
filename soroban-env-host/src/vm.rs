@@ -22,8 +22,8 @@ use super::{xdr::Hash, Host, RawVal, Symbol};
 use func_info::HOST_FUNCTIONS;
 use soroban_env_common::{
     meta::{self, get_ledger_protocol_version, get_pre_release_version},
-    xdr::{ReadXdr, ScEnvMetaEntry, ScHostFnErrorCode, ScVmErrorCode},
-    ConversionError, SymbolStr, TryIntoVal,
+    xdr::{ReadXdr, ScEnvMetaEntry, ScErrorCode, ScErrorType},
+    ConversionError, SymbolStr, TryIntoVal, U32Val,
 };
 
 use wasmi::{
@@ -99,33 +99,50 @@ impl Vm {
         if let Some(env_meta) = Self::module_custom_section(m, meta::ENV_META_V0_SECTION_NAME) {
             let mut cursor = Cursor::new(env_meta);
             for env_meta_entry in ScEnvMetaEntry::read_xdr_iter(&mut cursor) {
-                match host.map_err(env_meta_entry)? {
-                    ScEnvMetaEntry::ScEnvMetaKindInterfaceVersion(v) => {
-                        if get_pre_release_version(v)
-                            == get_pre_release_version(meta::INTERFACE_VERSION)
-                            && get_ledger_protocol_version(v)
-                                <= get_ledger_protocol_version(meta::INTERFACE_VERSION)
-                        {
-                            return Ok(());
-                        } else {
-                            return Err(host.err_status_msg(
-                                ScHostFnErrorCode::InputArgsInvalid,
-                                "unexpected environment interface version",
-                            ));
-                        }
+                if let ScEnvMetaEntry::ScEnvMetaKindInterfaceVersion(v) =
+                    host.map_err(env_meta_entry)?
+                {
+                    let got_pre = get_pre_release_version(v);
+                    let want_pre = get_pre_release_version(meta::INTERFACE_VERSION);
+                    let got_proto = get_ledger_protocol_version(v);
+                    let want_proto = get_ledger_protocol_version(meta::INTERFACE_VERSION);
+                    if got_pre != want_pre {
+                        return Err(host.err(
+                            ScErrorType::Contract,
+                            ScErrorCode::InvalidInput,
+                            "contract pre-release number does not match host",
+                            &[
+                                U32Val::from(got_pre).to_raw(),
+                                U32Val::from(want_pre).to_raw(),
+                            ],
+                        ));
+                    } else if got_proto > want_proto {
+                        return Err(host.err(
+                            ScErrorType::Contract,
+                            ScErrorCode::InvalidInput,
+                            "contract ledger protocol number exceeds host",
+                            &[
+                                U32Val::from(got_proto).to_raw(),
+                                U32Val::from(want_proto).to_raw(),
+                            ],
+                        ));
+                    } else {
+                        return Ok(());
                     }
-                    #[allow(unreachable_patterns)]
-                    _ => (),
                 }
             }
-            Err(host.err_status_msg(
-                ScHostFnErrorCode::InputArgsInvalid,
-                "missing environment interface version",
+            Err(host.err(
+                ScErrorType::Contract,
+                ScErrorCode::InvalidInput,
+                "contract missing environment interface version",
+                &[],
             ))
         } else {
-            Err(host.err_status_msg(
-                ScHostFnErrorCode::InputArgsInvalid,
-                "input contract missing metadata section",
+            Err(host.err(
+                ScErrorType::Contract,
+                ScErrorCode::InvalidInput,
+                "contract missing metadata section",
+                &[],
             ))
         }
     }
@@ -182,21 +199,20 @@ impl Vm {
 
         for hf in HOST_FUNCTIONS {
             let func = (hf.wrap)(&mut store);
-            linker.define(hf.mod_str, hf.fn_str, func).map_err(|_| {
-                host.err_status_msg(ScVmErrorCode::Instantiation, "error defining host function")
-            })?;
+            host.map_err(
+                linker
+                    .define(hf.mod_str, hf.fn_str, func)
+                    .map_err(|le| wasmi::Error::Linker(le)),
+            )?;
         }
 
         let not_started_instance = host.map_err(linker.instantiate(&mut store, &module))?;
 
-        let instance = not_started_instance
-            .ensure_no_start(&mut store)
-            .map_err(|_| {
-                host.err_status_msg(
-                    ScVmErrorCode::Instantiation,
-                    "module contains disallowed start function",
-                )
-            })?;
+        let instance = host.map_err(
+            not_started_instance
+                .ensure_no_start(&mut store)
+                .map_err(|ie| wasmi::Error::Instantiation(ie)),
+        )?;
 
         let memory = if let Some(ext) = instance.get_export(&mut store, "memory") {
             ext.into_memory()
@@ -217,9 +233,12 @@ impl Vm {
     pub(crate) fn get_memory(&self, host: &Host) -> Result<Memory, HostError> {
         match self.memory {
             Some(mem) => Ok(mem),
-            None => {
-                Err(host.err_status_msg(ScVmErrorCode::Memory, "no linear memory named `memory`"))
-            }
+            None => Err(host.err(
+                ScErrorType::WasmVm,
+                ScErrorCode::MissingValue,
+                "no linear memory named `memory`",
+                &[],
+            )),
         }
     }
 
@@ -244,17 +263,23 @@ impl Vm {
                     .get_export(&*self.store.borrow(), func_ss.as_ref())
                 {
                     None => {
-                        return Err(
-                            host.err_status_msg(ScVmErrorCode::Unknown, "invoking unknown export")
-                        )
+                        return Err(host.err(
+                            ScErrorType::WasmVm,
+                            ScErrorCode::MissingValue,
+                            "invoking unknown export",
+                            &[func.to_raw()],
+                        ))
                     }
                     Some(e) => e,
                 };
                 let func = match ext.into_func() {
                     None => {
-                        return Err(
-                            host.err_status_msg(ScVmErrorCode::Unknown, "export is not a function")
-                        )
+                        return Err(host.err(
+                            ScErrorType::WasmVm,
+                            ScErrorCode::UnexpectedType,
+                            "export is not a function",
+                            &[func.to_raw()],
+                        ))
                     }
                     Some(e) => e,
                 };

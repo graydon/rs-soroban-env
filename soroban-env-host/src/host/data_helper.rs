@@ -1,7 +1,8 @@
 use core::cmp::min;
 use std::rc::Rc;
 
-use soroban_env_common::Env;
+use soroban_env_common::xdr::{ScErrorCode, ScErrorType};
+use soroban_env_common::{Env, EnvBase, U32Val};
 
 use crate::budget::AsBudget;
 use crate::xdr::{
@@ -9,8 +10,8 @@ use crate::xdr::{
     HashIdPreimageContractId, HashIdPreimageCreateContractArgs, HashIdPreimageEd25519ContractId,
     HashIdPreimageFromAsset, HashIdPreimageSourceAccountContractId, LedgerEntry, LedgerEntryData,
     LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData,
-    LedgerKeyTrustLine, PublicKey, ScContractExecutable, ScHostStorageErrorCode,
-    ScHostValErrorCode, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
+    LedgerKeyTrustLine, PublicKey, ScContractExecutable, ScVal, Signer, SignerKey,
+    ThresholdIndexes, TrustLineAsset, Uint256,
 };
 use crate::{Host, HostError};
 
@@ -39,12 +40,22 @@ impl Host {
         match &entry.data {
             LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => match val {
                 ScVal::ContractExecutable(code) => Ok(code.clone()),
-                _ => Err(self.err_status_msg(
-                    ScHostValErrorCode::UnexpectedValType,
+                other => Err(self.err_lazy(
+                    ScErrorType::Storage,
+                    ScErrorCode::UnexpectedType,
                     "ledger entry for contract code does not contain contract executable",
+                    || match self.to_host_val(other) {
+                        Ok(rv) => [rv].as_slice(),
+                        _ => &[],
+                    },
                 )),
             },
-            _ => Err(self.err_status(ScHostStorageErrorCode::ExpectContractData)),
+            _ => Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::UnexpectedType,
+                "expected ContractData ledger entry",
+                &[],
+            )),
         }
     }
 
@@ -68,7 +79,18 @@ impl Host {
             .data
         {
             LedgerEntryData::ContractCode(e) => Ok(e.clone()),
-            _ => Err(self.err_status(ScHostStorageErrorCode::AccessToUnknownEntry)),
+            e => Err(self.err_lazy(
+                ScErrorType::Storage,
+                ScErrorCode::UnexpectedType,
+                "expected ContractCode ledger entry",
+                || match (
+                    self.bytes_new_from_slice(wasm_hash.as_slice()),
+                    self.string_new_from_slice(e.name()),
+                ) {
+                    (Ok(hash), Ok(tyname)) => [hash.to_raw(), tyname.to_raw()].as_slice(),
+                    _ => &[],
+                },
+            )),
         }
     }
 
@@ -146,12 +168,22 @@ impl Host {
         salt: Uint256,
     ) -> Result<HashIdPreimage, HostError> {
         if self.get_invoker_type()? != InvokerType::Account as u64 {
-            return Err(self.err_general("invoker is not an account"));
+            return Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::UnexpectedType,
+                "invoker is not an account",
+                &[],
+            ));
         }
 
-        let source_account = self
-            .source_account()
-            .ok_or_else(|| self.err_general("unexpected missing invoker in id preimage"))?;
+        let source_account = self.source_account().ok_or_else(|| {
+            self.err(
+                ScErrorType::Context,
+                ScErrorCode::MissingValue,
+                "unexpected missing invoker in id preimage",
+                &[],
+            )
+        })?;
         Ok(HashIdPreimage::ContractIdFromSourceAccount(
             HashIdPreimageSourceAccountContractId {
                 network_id: self
@@ -182,8 +214,16 @@ impl Host {
     pub fn load_account(&self, account_id: AccountId) -> Result<AccountEntry, HostError> {
         let acc = self.to_account_key(account_id);
         self.with_mut_storage(|storage| match &storage.get(&acc, self.as_budget())?.data {
-            LedgerEntryData::Account(ae) => Ok(ae.clone()), // TODO: clone needs to be metered
-            _ => Err(self.err_general("not account")),
+            LedgerEntryData::Account(ae) => ae.metered_clone(self.as_budget()),
+            e => Err(self.err_lazy(
+                ScErrorType::Storage,
+                ScErrorCode::UnexpectedType,
+                "ledger entry is not account",
+                || match self.string_new_from_slice(e.name()) {
+                    Ok(tyname) => [tyname.to_raw()].as_slice(),
+                    _ => &[],
+                },
+            )),
         })
     }
 
@@ -247,9 +287,14 @@ impl Host {
                         // weight.
                         let weight = min(signer.weight, u8::MAX as u32);
                         // We've found the target signer in the account signers, so return the weight
-                        return weight
-                            .try_into()
-                            .map_err(|_| self.err_general("signer weight overflow"));
+                        return weight.try_into().map_err(|_| {
+                            self.err(
+                                ScErrorType::Auth,
+                                ScErrorCode::ArithDomain,
+                                "signer weight does not fit in u8",
+                                &[U32Val::from(weight).to_raw()],
+                            )
+                        });
                     }
                 }
             }

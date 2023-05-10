@@ -481,7 +481,9 @@ impl Budget {
     where
         F: FnOnce() -> Result<T, HostError>,
     {
+        let mut prev = false;
         self.mut_budget(|mut b| {
+            prev = b.enabled;
             b.enabled = false;
             Ok(())
         })?;
@@ -489,7 +491,7 @@ impl Budget {
         let res = f();
 
         self.mut_budget(|mut b| {
-            b.enabled = true;
+            b.enabled = prev;
             Ok(())
         })?;
         res

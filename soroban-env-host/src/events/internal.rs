@@ -1,6 +1,9 @@
-use soroban_env_common::{BytesObject, VecObject};
+use soroban_env_common::{
+    xdr::{ScErrorCode, ScErrorType},
+    BytesObject, VecObject,
+};
 
-use super::{DebugEvent, Event, Events, HostEvent};
+use super::{Event, Events, HostEvent};
 use crate::{
     budget::{AsBudget, Budget},
     xdr,
@@ -25,7 +28,12 @@ impl InternalContractEvent {
         let topics = if let ScVal::Vec(Some(v)) = host.from_host_obj(self.topics)?.into() {
             Ok(v)
         } else {
-            Err(host.err_status(xdr::ScHostObjErrorCode::UnexpectedType))
+            Err(host.err(
+                ScErrorType::Events,
+                ScErrorCode::InvalidInput,
+                "converting event topics to vector",
+                &[self.topics.to_raw()],
+            ))
         }?;
         let data = host.from_host_val(self.data)?;
         let contract_id = match self.contract_id {
@@ -46,12 +54,11 @@ impl InternalContractEvent {
 #[derive(Clone, Debug)]
 pub enum InternalEvent {
     Contract(InternalContractEvent),
-    Debug(DebugEvent),
     StructuredDebug(InternalContractEvent),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum EventStatus {
+pub(crate) enum EventError {
     FromFailedCall,
     FromSuccessfulCall,
 }
@@ -60,14 +67,14 @@ pub(crate) enum EventStatus {
 #[derive(Clone, Default)]
 pub(crate) struct InternalEventsBuffer {
     //the bool keeps track of if the call this event was emitted in failed
-    pub(crate) vec: Vec<(InternalEvent, EventStatus)>,
+    pub(crate) vec: Vec<(InternalEvent, EventError)>,
 }
 
 impl InternalEventsBuffer {
     // Records an InternalEvent
     pub fn record(&mut self, e: InternalEvent, _budget: &Budget) -> Result<(), HostError> {
         //TODO:Add metering for non-diagnostic events
-        self.vec.push((e, EventStatus::FromSuccessfulCall));
+        self.vec.push((e, EventError::FromSuccessfulCall));
         Ok(())
     }
 
@@ -75,7 +82,7 @@ impl InternalEventsBuffer {
     pub fn rollback(&mut self, events: usize) -> Result<(), HostError> {
         // note that we first skip the events that are not being rolled back
         for e in self.vec.iter_mut().skip(events) {
-            e.1 = EventStatus::FromFailedCall;
+            e.1 = EventError::FromFailedCall;
         }
 
         Ok(())
@@ -88,7 +95,6 @@ impl InternalEventsBuffer {
         for e in self.vec.iter() {
             match &e.0 {
                 InternalEvent::Contract(c) => debug!("Contract event: {:?}", c),
-                InternalEvent::Debug(d) => debug!("Debug event: {}", d),
                 InternalEvent::StructuredDebug(c) => debug!("StructuredDebug event: {:?}", c),
             }
         }
@@ -105,16 +111,12 @@ impl InternalEventsBuffer {
             .map(|e| match &e.0 {
                 InternalEvent::Contract(c) => Ok(HostEvent {
                     event: Event::Contract(c.to_xdr(host)?),
-                    failed_call: e.1 == EventStatus::FromFailedCall,
-                }),
-                InternalEvent::Debug(d) => Ok(HostEvent {
-                    event: Event::Debug(d.clone()),
-                    failed_call: e.1 == EventStatus::FromFailedCall,
+                    failed_call: e.1 == EventError::FromFailedCall,
                 }),
                 InternalEvent::StructuredDebug(c) => host.as_budget().with_free_budget(|| {
                     Ok(HostEvent {
                         event: Event::StructuredDebug(c.to_xdr(host)?),
-                        failed_call: e.1 == EventStatus::FromFailedCall,
+                        failed_call: e.1 == EventError::FromFailedCall,
                     })
                 }),
             })

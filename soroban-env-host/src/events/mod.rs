@@ -1,9 +1,7 @@
-mod debug;
 pub(crate) mod diagnostic;
 mod internal;
 pub(crate) mod system_events;
 
-pub use debug::{DebugArg, DebugError, DebugEvent};
 pub(crate) use internal::InternalEventsBuffer;
 // expose them as pub use for benches
 pub use internal::{InternalContractEvent, InternalEvent};
@@ -23,8 +21,6 @@ pub struct HostEvent {
 #[derive(Clone, Debug)]
 pub enum Event {
     Contract(crate::xdr::ContractEvent),
-    // Debug events are metered and will not be reported in tx meta
-    Debug(DebugEvent),
     // StructuredDebug should not affect metering
     StructuredDebug(crate::xdr::ContractEvent),
 }
@@ -49,30 +45,6 @@ impl Host {
 
     pub fn get_events(&self) -> Result<Events, HostError> {
         self.0.events.borrow().externalize(self)
-    }
-
-    /// Records a debug event. This in itself is not necessarily an error; it
-    /// might just be some contextual event we want to put in a debug log for
-    /// diagnostic purpopses. The return value from this is therefore () when
-    /// the event is recorded successfully, even if the event itself
-    /// _represented_ some other error. This function only returns Err(...) when
-    /// there was a failure to record the event, such as when budget is
-    /// exceeded.
-    pub fn record_debug_event<T>(&self, src: T) -> Result<(), HostError>
-    where
-        DebugEvent: From<T>,
-    {
-        // We want to record an event _before_ we charge the budget, to maximize
-        // the chance we return "what the contract was doing when it ran out of
-        // gas" in cases it does. This does mean in that one case we'll exceed
-        // the gas limit a tiny amount (one event-worth) but it's not something
-        // users can harm us with nor does it observably effect the order the
-        // contract runs out of gas in; this is an atomic action from the
-        // contract's perspective.
-        let event: DebugEvent = src.into();
-        self.with_events_mut(|events| {
-            Ok(events.record(InternalEvent::Debug(event), self.as_budget()))
-        })?
     }
 
     // Records a contract event.

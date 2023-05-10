@@ -1,6 +1,6 @@
 use crate::xdr::ScHostFnErrorCode;
 use crate::{
-    xdr::{ScHostObjErrorCode, ScStatus, ScVal},
+    xdr::{ScHostObjErrorCode, ScError, ScVal},
     Env, Host, HostError, RawVal,
 };
 use soroban_env_common::{Compare, EnvBase};
@@ -123,7 +123,7 @@ fn bytes_xdr_roundtrip() -> Result<(), HostError> {
         host.map_err("stellar".to_string().try_into())?,
     )))?;
     // status
-    roundtrip(ScVal::Status(ScStatus::HostObjectError(
+    roundtrip(ScVal::Error(ScError::HostObjectError(
         ScHostObjErrorCode::UnknownError,
     )))?;
 

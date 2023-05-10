@@ -10,9 +10,10 @@
 use std::rc::Rc;
 
 use soroban_env_common::Compare;
+use soroban_env_common::xdr::{ScErrorType, ScErrorCode};
 
 use crate::budget::Budget;
-use crate::xdr::{LedgerEntry, LedgerKey, ScHostStorageErrorCode};
+use crate::xdr::{LedgerEntry, LedgerKey};
 use crate::Host;
 use crate::{host::metered_map::MeteredOrdMap, HostError};
 
@@ -102,13 +103,13 @@ impl Footprint {
             match (existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
-                    Err(ScHostStorageErrorCode::ReadwriteAccessToReadonlyEntry.into())
+                    Err((ScErrorType::Storage, ScErrorCode::InvalidAction).into())
                 }
                 (AccessType::ReadWrite, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadWrite, AccessType::ReadWrite) => Ok(()),
             }
         } else {
-            Err(ScHostStorageErrorCode::AccessToUnknownEntry.into())
+            Err((ScErrorType::Storage, ScErrorCode::MissingValue).into())
         }
     }
 }
@@ -197,8 +198,7 @@ impl Storage {
             }
         };
         match self.map.get::<Rc<LedgerKey>>(key, budget)? {
-            None => Err(ScHostStorageErrorCode::MissingKeyInGet.into()),
-            Some(None) => Err(ScHostStorageErrorCode::GetOnDeletedKey.into()),
+            None | Some(None) => Err((ScErrorType::Storage, ScErrorCode::MissingValue).into()),
             Some(Some(val)) => Ok(Rc::clone(val)),
         }
     }

@@ -1,7 +1,7 @@
 use super::{call_macro_with_all_host_functions, Env, EnvBase, Symbol};
 use super::{
     AddressObject, Bool, BytesObject, I128Object, I256Object, I64Object, MapObject, Object, RawVal,
-    Status, StringObject, SymbolObject, U128Object, U256Object, U32Val, U64Object, U64Val,
+    Error, StringObject, SymbolObject, U128Object, U256Object, U32Val, U64Object, U64Val,
     VecObject, Void,
 };
 use core::{any, convert::Infallible};
