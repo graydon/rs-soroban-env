@@ -1,7 +1,7 @@
 use crate::{
     declare_tag_based_object_wrapper, declare_tag_based_wrapper, impl_rawval_wrapper_base,
-    impl_tryfroms_and_tryfromvals_delegating_to_rawvalconvertible, Compare, I32Val, SymbolSmall,
-    SymbolStr, U32Val,
+    impl_tryfroms_and_tryfromvals_delegating_to_rawvalconvertible, Compare, EnvBase, I32Val,
+    SymbolSmall, SymbolStr, U32Val,
 };
 use stellar_xdr::{ScError, ScValType};
 
@@ -374,28 +374,28 @@ impl_tryfroms_and_tryfromvals_delegating_to_rawvalconvertible!(Error);
 
 #[cfg(feature = "wasmi")]
 pub trait WasmiMarshal: Sized {
-    fn try_marshal_from_value(v: wasmi::Value) -> Option<Self>;
-    fn marshal_from_self(self) -> wasmi::Value;
+    fn try_marshal_from_value<E: EnvBase>(env: &E, v: wasmi::Value) -> Option<Self>;
+    fn marshal_from_self<E: EnvBase>(self, env: &E) -> wasmi::Value;
 }
 
 #[cfg(feature = "wasmi")]
 impl WasmiMarshal for Val {
-    fn try_marshal_from_value(v: wasmi::Value) -> Option<Self> {
+    fn try_marshal_from_value<E: EnvBase>(env: &E, v: wasmi::Value) -> Option<Self> {
         if let wasmi::Value::I64(i) = v {
-            Some(Val::from_payload(i as u64))
+            Some(env.make_absolute(Val::from_payload(i as u64)))
         } else {
             None
         }
     }
 
-    fn marshal_from_self(self) -> wasmi::Value {
-        wasmi::Value::I64(self.get_payload() as i64)
+    fn marshal_from_self<E: EnvBase>(self, env: &E) -> wasmi::Value {
+        wasmi::Value::I64(env.make_relative(self).get_payload() as i64)
     }
 }
 
 #[cfg(feature = "wasmi")]
 impl WasmiMarshal for u64 {
-    fn try_marshal_from_value(v: wasmi::Value) -> Option<Self> {
+    fn try_marshal_from_value<E: EnvBase>(_env: &E, v: wasmi::Value) -> Option<Self> {
         if let wasmi::Value::I64(i) = v {
             Some(i as u64)
         } else {
@@ -403,14 +403,14 @@ impl WasmiMarshal for u64 {
         }
     }
 
-    fn marshal_from_self(self) -> wasmi::Value {
+    fn marshal_from_self<E: EnvBase>(self, _env: &E) -> wasmi::Value {
         wasmi::Value::I64(self as i64)
     }
 }
 
 #[cfg(feature = "wasmi")]
 impl WasmiMarshal for i64 {
-    fn try_marshal_from_value(v: wasmi::Value) -> Option<Self> {
+    fn try_marshal_from_value<E: EnvBase>(_env: &E, v: wasmi::Value) -> Option<Self> {
         if let wasmi::Value::I64(i) = v {
             Some(i)
         } else {
@@ -418,7 +418,7 @@ impl WasmiMarshal for i64 {
         }
     }
 
-    fn marshal_from_self(self) -> wasmi::Value {
+    fn marshal_from_self<E: EnvBase>(self, _env: &E) -> wasmi::Value {
         wasmi::Value::I64(self)
     }
 }

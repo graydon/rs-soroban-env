@@ -10,7 +10,10 @@ use crate::{
     err,
     events::{diagnostic::DiagnosticLevel, Events, InternalEventsBuffer},
     expiration_ledger_bumps::{ExpirationLedgerBumps, LedgerBump},
-    host_object::{HostMap, HostObject, HostObjectType, HostVec},
+    host_object::{
+        handle_to_index, index_to_handle, is_relative_object_handle, HostMap, HostObject,
+        HostObjectType, HostVec,
+    },
     impl_bignum_host_fns_rhs_u32, impl_wrapping_obj_from_num, impl_wrapping_obj_to_num,
     num::*,
     storage::{InstanceStorageMap, Storage},
@@ -1098,6 +1101,55 @@ impl EnvBase for Host {
     fn log_from_slice(&self, msg: &str, vals: &[Val]) -> Result<Void, HostError> {
         self.log_diagnostics(msg, vals).map(|_| Void::from(()))
     }
+
+    fn make_absolute(&self, val: Val) -> Val {
+        if let Ok(obj) = Object::try_from(val) {
+            let handle = obj.get_handle();
+            if is_relative_object_handle(handle) {
+                let index = handle_to_index(handle);
+                // FIXME: error handling
+                return self
+                    .with_current_context_mut(|ctx| match ctx.relative_objects.get(index) {
+                        Some(abs) => Ok(*abs),
+                        None => Err(self.err(
+                            ScErrorType::Context,
+                            ScErrorCode::InvalidInput,
+                            "unknown relative object reference",
+                            &[val],
+                        )),
+                    })
+                    .unwrap()
+                    .to_val();
+            } else {
+                // FIXME: error handling
+                self.err(
+                    ScErrorType::Context,
+                    ScErrorCode::InvalidInput,
+                    "make_absolute given an absolute reference",
+                    &[val],
+                );
+            }
+        }
+        val
+    }
+
+    fn make_relative(&self, val: Val) -> Val {
+        if let Ok(obj) = Object::try_from(val) {
+            let handle = obj.get_handle();
+            if !is_relative_object_handle(handle) {
+                // FIXME: error handling
+                return self
+                    .with_current_context_mut(|ctx| {
+                        let index = ctx.relative_objects.len();
+                        let handle = index_to_handle(self, index, true)?;
+                        ctx.relative_objects.push(obj);
+                        Ok(Object::from_handle_and_tag(handle, val.get_tag()).to_val())
+                    })
+                    .unwrap();
+            }
+        }
+        val
+    }
 }
 
 impl VmCallerEnv for Host {
@@ -1665,7 +1717,7 @@ impl VmCallerEnv for Host {
             &vm,
             vals_pos,
             vals.as_mut_slice(),
-            |buf| Val::from_payload(u64::from_le_bytes(*buf)),
+            |buf| self.make_absolute(Val::from_payload(u64::from_le_bytes(*buf))),
         )?;
         for v in vals.iter() {
             self.check_val_integrity(*v)?;
@@ -1726,7 +1778,7 @@ impl VmCallerEnv for Host {
                 &vm,
                 vals_pos.into(),
                 mapobj.map.as_slice(),
-                |pair| u64::to_le_bytes(pair.1.get_payload()),
+                |pair| u64::to_le_bytes(self.make_relative(pair.1).get_payload()),
             )?;
             Ok(())
         })?;
@@ -1955,7 +2007,7 @@ impl VmCallerEnv for Host {
             &vm,
             pos,
             vals.as_mut_slice(),
-            |buf| Val::from_payload(u64::from_le_bytes(*buf)),
+            |buf| self.make_absolute(Val::from_payload(u64::from_le_bytes(*buf))),
         )?;
         for v in vals.iter() {
             self.check_val_integrity(*v)?;
@@ -1977,7 +2029,7 @@ impl VmCallerEnv for Host {
                 &vm,
                 vals_pos.into(),
                 vecobj.as_slice(),
-                |x| u64::to_le_bytes(x.get_payload()),
+                |x| u64::to_le_bytes(self.make_relative(*x).get_payload()),
             )
         })?;
         Ok(Val::VOID)

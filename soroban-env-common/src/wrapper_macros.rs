@@ -84,9 +84,12 @@ macro_rules! impl_wrapper_wasmi_conversions {
         // wasmi / VM argument support
         #[cfg(feature = "wasmi")]
         impl $crate::WasmiMarshal for $wrapper {
-            fn try_marshal_from_value(v: wasmi::Value) -> Option<Self> {
+            fn try_marshal_from_value<E: $crate::EnvBase>(
+                env: &E,
+                v: wasmi::Value,
+            ) -> Option<Self> {
                 if let wasmi::Value::I64(i) = v {
-                    let val = $crate::Val::from_payload(i as u64);
+                    let val = env.make_absolute($crate::Val::from_payload(i as u64));
                     if <Self as $crate::val::ValConvert>::is_val_type(val) {
                         return Some(unsafe {
                             <Self as $crate::val::ValConvert>::unchecked_from_val(val)
@@ -96,8 +99,8 @@ macro_rules! impl_wrapper_wasmi_conversions {
                 None
             }
 
-            fn marshal_from_self(self) -> wasmi::Value {
-                wasmi::Value::I64(self.as_val().get_payload() as i64)
+            fn marshal_from_self<E: $crate::EnvBase>(self, env: &E) -> wasmi::Value {
+                wasmi::Value::I64(env.make_relative(self.to_val()).get_payload() as i64)
             }
         }
     };
@@ -189,7 +192,10 @@ macro_rules! declare_wasmi_marshal_for_enum {
     ($ENUM:ident) => {
         #[cfg(feature = "wasmi")]
         impl $crate::WasmiMarshal for $ENUM {
-            fn try_marshal_from_value(v: wasmi::Value) -> Option<Self> {
+            fn try_marshal_from_value<E: $crate::EnvBase>(
+                _env: &E,
+                v: wasmi::Value,
+            ) -> Option<Self> {
                 if let wasmi::Value::I64(i) = v {
                     use num_traits::FromPrimitive;
                     $ENUM::from_i64(i)
@@ -198,7 +204,7 @@ macro_rules! declare_wasmi_marshal_for_enum {
                 }
             }
 
-            fn marshal_from_self(self) -> wasmi::Value {
+            fn marshal_from_self<E: $crate::EnvBase>(self, _env: &E) -> wasmi::Value {
                 wasmi::Value::I64(self as i64)
             }
         }

@@ -9,7 +9,7 @@ use crate::{
     err,
     storage::{InstanceStorageMap, StorageMap},
     xdr::{ContractCostType, ContractExecutable, Hash, HostFunction, HostFunctionType, ScVal},
-    Error, Host, HostError, Symbol, SymbolStr, TryFromVal, TryIntoVal, Val,
+    Error, Host, HostError, Object, Symbol, SymbolStr, TryFromVal, TryIntoVal, Val,
 };
 
 #[cfg(any(test, feature = "testutils"))]
@@ -88,6 +88,7 @@ impl TestContractFrame {
 pub(crate) struct Context {
     pub(crate) frame: Frame,
     prng: Option<Prng>,
+    pub(crate) relative_objects: Vec<Object>,
     pub(crate) storage: Option<InstanceStorageMap>,
 }
 
@@ -125,6 +126,7 @@ impl Host {
             frame,
             prng: None,
             storage: None,
+            relative_objects: Vec::new(),
         };
         self.try_borrow_context_mut()?.push(ctx);
         Ok(RollbackPoint {
@@ -240,6 +242,21 @@ impl Host {
         };
         if let Some(context) = context_guard.last() {
             f(Some(&context.frame))
+        } else {
+            drop(context_guard);
+            f(None)
+        }
+    }
+
+    pub(crate) fn with_current_context_mut_opt<F, U>(&self, f: F) -> Result<U, HostError>
+    where
+        F: FnOnce(Option<&mut Context>) -> Result<U, HostError>,
+    {
+        let Ok(mut context_guard) = self.0.context.try_borrow_mut() else {
+            return Err(self.err(ScErrorType::Context, ScErrorCode::InternalError, "context is already borrowed", &[]));
+        };
+        if let Some(context) = context_guard.last_mut() {
+            f(Some(context))
         } else {
             drop(context_guard);
             f(None)

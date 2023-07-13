@@ -1,6 +1,9 @@
+#![allow(dead_code)]
+
 use soroban_env_common::{
-    xdr::ContractCostType, Compare, DurationSmall, I128Small, I256Small, I64Small, SymbolSmall,
-    SymbolStr, Tag, TimepointSmall, U128Small, U256Small, U64Small,
+    xdr::{ContractCostType, ScErrorCode, ScErrorType},
+    Compare, DurationSmall, I128Small, I256Small, I64Small, SymbolSmall, SymbolStr, Tag,
+    TimepointSmall, U128Small, U256Small, U64Small,
 };
 
 use crate::{
@@ -169,6 +172,55 @@ declare_mem_host_object_type!(xdr::ScString, StringObject, String);
 declare_mem_host_object_type!(xdr::ScSymbol, SymbolObject, Symbol);
 declare_host_object_type!(xdr::ScAddress, AddressObject, Address);
 
+// Objects come in two flavors: relative and absolute. Relative objects are the
+// ones we pass to and from wasm code, and are looked up indirectly through a
+// per-context table to find their absolute values. Absolute objects are the
+// same in all contexts (and outside contexts, eg. in host objects themselves or
+// while setting-up the host). Relative-to-absolute translation is done very
+// close to the VM, when marshalling. Host code should never see relative object
+// handles, and if you ever try to look one up in the host object table, it will
+// fail.
+//
+// Also note: the relative/absolute object reference translation is _not_ done
+// when running in native / local-testing mode, so you will not get identical
+// object numbers in that case. Since there is no real isolation between
+// contracts in that mode, there's no point bothering with the translation (and
+// there's no really obvious place to perform it systematically, like in the
+// wasm marshalling path).
+
+pub fn is_relative_object_handle(handle: u32) -> bool {
+    handle & 1 == 0
+}
+
+pub fn is_relative_object(obj: Object) -> bool {
+    is_relative_object_handle(obj.get_handle())
+}
+
+pub fn is_relative_object_value(val: Val) -> bool {
+    if let Ok(obj) = Object::try_from(val) {
+        is_relative_object(obj)
+    } else {
+        false
+    }
+}
+
+pub fn handle_to_index(handle: u32) -> usize {
+    (handle as usize) >> 1
+}
+
+pub fn index_to_handle(host: &Host, index: usize, relative: bool) -> Result<u32, HostError> {
+    if let Ok(smaller) = u32::try_from(index) {
+        if let Some(shifted) = smaller.checked_shl(1) {
+            if relative {
+                return Ok(shifted | 0);
+            } else {
+                return Ok(shifted | 1);
+            }
+        }
+    }
+    Err(host.err_arith_overflow())
+}
+
 impl Host {
     /// Moves a value of some type implementing [`HostObjectType`] into the host's
     /// object array, returning a [`HostObj`] containing the new object's array
@@ -177,15 +229,12 @@ impl Host {
         &self,
         hot: HOT,
     ) -> Result<HOT::Wrapper, HostError> {
-        let prev_len = self.try_borrow_objects()?.len();
-        if prev_len > u32::MAX as usize {
-            return Err(self.err_arith_overflow());
-        }
+        let index = self.try_borrow_objects()?.len();
+        let handle = index_to_handle(self, index, false)?;
         // charge for the new host object, which is just the amortized cost of a single
         // `HostObject` allocation
         metered_clone::charge_heap_alloc::<HostObject>(1, self.as_budget())?;
         self.try_borrow_objects_mut()?.push(HOT::inject(hot));
-        let handle = prev_len as u32;
         Ok(HOT::new_from_handle(handle))
     }
 
@@ -203,7 +252,16 @@ impl Host {
         let r = self.try_borrow_objects()?;
         let obj: Object = obj.into();
         let handle: u32 = obj.get_handle();
-        f(r.get(handle as usize))
+        if is_relative_object_handle(handle) {
+            Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+                "looking up relative object",
+                &[obj.to_val()],
+            ))
+        } else {
+            f(r.get(handle_to_index(handle)))
+        }
     }
 
     pub(crate) fn check_val_integrity(&self, val: Val) -> Result<(), HostError> {

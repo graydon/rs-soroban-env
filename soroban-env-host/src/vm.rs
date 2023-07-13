@@ -21,7 +21,7 @@ use func_info::HOST_FUNCTIONS;
 use soroban_env_common::{
     meta::{self, get_ledger_protocol_version, get_pre_release_version},
     xdr::{ReadXdr, ScEnvMetaEntry, ScErrorCode, ScErrorType},
-    ConversionError, SymbolStr, TryIntoVal, WasmiMarshal,
+    ConversionError, EnvBase, SymbolStr, TryIntoVal, WasmiMarshal,
 };
 
 use wasmi::{Engine, FuelConsumptionMode, Func, Instance, Linker, Memory, Module, Store, Value};
@@ -269,7 +269,7 @@ impl Vm {
             }
         }
         Ok(
-            <_ as WasmiMarshal>::try_marshal_from_value(wasm_ret[0].clone())
+            <_ as WasmiMarshal>::try_marshal_from_value(host, wasm_ret[0].clone())
                 .ok_or(ConversionError)?,
         )
     }
@@ -283,7 +283,7 @@ impl Vm {
         host.charge_budget(ContractCostType::InvokeVmFunction, None)?;
         let wasm_args: Vec<Value> = args
             .iter()
-            .map(|i| Value::I64(i.get_payload() as i64))
+            .map(|i| Value::I64(host.make_relative(*i).get_payload() as i64))
             .collect();
         let func_ss: SymbolStr = func_sym.try_into_val(host)?;
         let ext = match self

@@ -90,11 +90,11 @@ macro_rules! generate_dispatch_functions {
                     // happens to be a natural switching point for that: we have
                     // conversions to and from both Val and i64 / u64 for
                     // wasmi::Value.
-                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::try_marshal_from_value(Value::I64($arg)).ok_or(BadSignature)?),*);
+                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::try_marshal_from_value(&host, Value::I64($arg)).ok_or(BadSignature)?),*);
 
                     let res = match res {
                         Ok(ok) => {
-                            let val: Value = ok.marshal_from_self();
+                            let val: Value = ok.marshal_from_self(&host);
                             if let Value::I64(v) = val {
                                 Ok((v,))
                             } else {

@@ -139,6 +139,13 @@ pub trait EnvBase: Sized + Clone {
     /// events are enabled. When running on host, logs directly; when running on
     /// guest, redirects through log_from_linear_memory.
     fn log_from_slice(&self, msg: &str, vals: &[Val]) -> Result<Void, Self::Error>;
+
+    fn make_relative(&self, val: Val) -> Val {
+        val
+    }
+    fn make_absolute(&self, val: Val) -> Val {
+        val
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
