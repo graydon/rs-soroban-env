@@ -44,10 +44,11 @@ pub fn generate(file_lit: LitStr) -> Result<TokenStream, Error> {
             });
 
             let r#return = format_ident!("{}", &f.r#return);
+            let fallible = f.fallible;
 
             quote! {
                 #[doc = #docs]
-                { #export, fn #name(#(#args),*) -> #r#return }
+                { #export, #fallible, fn #name(#(#args),*) -> #r#return }
             }
         });
 
@@ -108,6 +109,8 @@ pub struct Function {
     pub args: Vec<Arg>,
     pub r#return: String,
     pub docs: Option<String>,
+    #[serde(default)]
+    pub fallible: bool, // defaults to bool::default() which is false
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]

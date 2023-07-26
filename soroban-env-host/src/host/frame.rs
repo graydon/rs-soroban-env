@@ -1,14 +1,13 @@
-use soroban_env_common::{
-    xdr::{ContractIdPreimage, ScAddress, ScContractInstance, ScErrorCode, ScErrorType},
-    AddressObject,
-};
-
 use crate::{
     auth::AuthorizationManagerSnapshot,
     budget::AsBudget,
+    host::error::ErrorValueEncoding,
     storage::{InstanceStorageMap, StorageMap},
-    xdr::{ContractCostType, ContractExecutable, Hash, HostFunction, HostFunctionType, ScVal},
-    Error, Host, HostError, Object, Symbol, SymbolStr, TryFromVal, TryIntoVal, Val,
+    xdr::{
+        ContractCostType, ContractExecutable, ContractIdPreimage, Hash, HostFunction,
+        HostFunctionType, ScAddress, ScContractInstance, ScErrorCode, ScErrorType, ScVal,
+    },
+    AddressObject, Error, Host, HostError, Object, Symbol, SymbolStr, TryFromVal, TryIntoVal, Val,
 };
 
 #[cfg(any(test, feature = "testutils"))]
@@ -497,7 +496,7 @@ impl Host {
         func: Symbol,
         args: &[Val],
         reentry_mode: ContractReentryMode,
-        internal_host_call: bool,
+        internal_host_call: bool
     ) -> Result<Val, HostError> {
         // Internal host calls may call some special functions that otherwise
         // aren't allowed to be called.
@@ -513,6 +512,9 @@ impl Host {
                 "can't invoke a reserved function directly",
                 &[func.to_val()],
             ));
+        }
+        for a in args {
+            a.filter_error_input(self)?;
         }
         if !matches!(reentry_mode, ContractReentryMode::Allowed) {
             let mut is_last_non_host_frame = true;

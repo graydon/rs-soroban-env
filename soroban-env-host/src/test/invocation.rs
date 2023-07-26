@@ -1,8 +1,15 @@
-use expect_test::expect;
-use soroban_env_common::{xdr::ScErrorCode, Env, TryFromVal, Val};
+use std::rc::Rc;
 
-use crate::{events::HostEvent, xdr::ScErrorType, Error, Host, HostError, Symbol, Tag};
-use soroban_test_wasms::{ADD_I32, INVOKE_CONTRACT, VEC};
+use expect_test::expect;
+use soroban_env_common::{
+    xdr::{self, ScErrorCode},
+    Env, EnvBase, TryFromVal, Val,
+};
+
+use crate::{
+    events::HostEvent, xdr::ScErrorType, ContractFunctionSet, Error, Host, HostError, Symbol, Tag,
+};
+use soroban_test_wasms::{ADD_I32, ERRORS, INVOKE_CONTRACT, VEC};
 
 #[test]
 fn invoke_single_contract_function() -> Result<(), HostError> {
@@ -72,7 +79,6 @@ fn invoke_cross_contract_with_err() -> Result<(), HostError> {
     assert_eq!(sv.get_payload(), exp_st.to_val().get_payload());
 
     let events = host.get_events()?.0;
-    dbg!(&events);
     assert_eq!(events.len(), 5);
     let last_event: &HostEvent = events.last().unwrap();
     // run `UPDATE_EXPECT=true cargo test` to update this.
@@ -176,6 +182,108 @@ fn invoke_contract_with_reentry() -> Result<(), HostError> {
     assert!(HostError::result_matches_err(call_res, code));
     let try_call_err = Error::try_from(try_call_val)?;
     assert_eq!(try_call_err, err);
+
+    Ok(())
+}
+
+struct ReturnContractError;
+impl ReturnContractError {
+    const ERROR: Error = Error::from_contract_error(12345);
+}
+impl ContractFunctionSet for ReturnContractError {
+    fn call(&self, _func: &Symbol, _host: &Host, _args: &[Val]) -> Option<Val> {
+        Some(Self::ERROR.into())
+    }
+}
+
+#[test]
+fn native_invoke_return_err_variants() -> Result<(), HostError> {
+    let host = Host::test_host_with_recording_footprint();
+    let addr = host.add_host_object(xdr::ScAddress::Contract(xdr::Hash([0; 32])))?;
+    host.register_test_contract(addr, Rc::new(ReturnContractError))?;
+
+    let sym = Symbol::try_from_small_str("go")?;
+    let args = host.vec_new(Val::VOID.into())?;
+    let err = ReturnContractError::ERROR;
+
+    // We want a call to return `Err(Error)` not `Ok(Error)`
+    let call_res = host.call(addr, sym, args);
+    assert!(HostError::result_matches_err(call_res, err));
+
+    // We want a try_call to return `Ok(Error)`
+    let try_call_val = host.try_call(addr, sym, args)?;
+    assert!(try_call_val.shallow_eq(&err.into()));
+
+    Ok(())
+}
+
+fn test_host_fn_err(
+    fname: &str,
+    argv: &[Val],
+    expect_call_res: Result<Val, Error>,
+    expect_try_call_res: Result<Val, Error>,
+) -> Result<(), HostError> {
+    let host = Host::test_host_with_recording_footprint();
+    host.enable_debug()?;
+    let addr = host.register_test_contract_wasm(ERRORS);
+    let sym = Symbol::try_from_val(&host, &fname)?;
+    let args = host.vec_new_from_slice(argv)?;
+    let call_res = host.call(addr, sym, args);
+    let try_call_res = host.try_call(addr, sym, args);
+    #[allow(unused_must_use)]
+    match (call_res, expect_call_res) {
+        (Ok(v), Ok(expected)) => assert!(v.shallow_eq(&expected)),
+        (Err(e), Err(expected)) => assert_eq!(e.error, expected),
+        (got, expected) => {
+            dbg!(got);
+            dbg!(expected);
+            panic!("unexpected `call` results on \"{}\"", fname);
+        }
+    }
+    #[allow(unused_must_use)]
+    match (try_call_res, expect_try_call_res) {
+        (Ok(v), Ok(expected)) => assert!(v.shallow_eq(&expected)),
+        (Err(e), Err(expected)) => assert_eq!(e.error, expected),
+        (got, expected) => {
+            dbg!(got);
+            dbg!(expected);
+            panic!("unexpected `try_call` results on \"{}\"", fname);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn native_invoke_return_ok_err() -> Result<(), HostError> {
+    let err: Error = Error::from_contract_error(12345);
+    let tyerr: Error = Error::from_type_and_code(ScErrorType::Value, ScErrorCode::UnexpectedType);
+    let errv: Val = err.to_val();
+    let void = Val::VOID.into();
+
+    // `err_eek` returns `Err(Eek)` which the SDK turns into `Err(Error)` which
+    // `call` returns as an `Err(Error)` and `try_call` as an `Ok(Error)`
+    test_host_fn_err(&"err_eek", &[], Err(err), Ok(errv))?;
+
+    // `err_err` returns `Err(Error)` which produces the same pattern as
+    // `err_eek` from our perspective.
+    test_host_fn_err(&"err_err", &[], Err(err), Ok(errv))?;
+
+    // `ok_err` returns `Ok(Error)` which `Host::with_frame` converts to
+    // `Err(Error)`, and `try_call` turns back to `Ok(Error)`, i.e. the same
+    // pattern of results again.
+    test_host_fn_err(&"ok_err", &[], Err(err), Ok(errv))?;
+
+    // `ok_val_err` returns `Ok(Val)` where `Val` happens to be `Error` and we
+    // get the same pattern of results again.
+    test_host_fn_err(&"ok_val_err", &[], Err(err), Ok(errv))?;
+
+    // `ok_val` returns `Ok(())` which both `call` and `try_call`
+    // should pass through.
+    test_host_fn_err(&"ok_val", &[], Ok(void), Ok(void))?;
+
+    // `accept` should reject `Error` as input, returning `Err(UnexpectedType)`
+    // from `call` and `Ok(UnexpectedType)` from `try_call`.
+    test_host_fn_err(&"accept", &[errv], Err(tyerr), Ok(tyerr.to_val()))?;
 
     Ok(())
 }

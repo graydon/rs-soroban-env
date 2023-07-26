@@ -1,15 +1,16 @@
 use crate::{
     budget::AsBudget,
     events::Events,
-    xdr::{self, ScError},
-    EnvBase, Error, Host,
+    xdr::{self, ScError, ScErrorCode, ScErrorType},
+    ConversionError, EnvBase, Error, Host, TryFromVal, Val,
+};
+use crate::{
+    AddressObject, Bool, BytesObject, DurationObject, I128Object, I256Object, I256Val, I32Val,
+    I64Object, MapObject, StorageType, StringObject, Symbol, SymbolObject, TimepointObject,
+    U128Object, U256Object, U256Val, U32Val, U64Object, U64Val, VecObject, Void,
 };
 use backtrace::{Backtrace, BacktraceFrame};
 use core::fmt::Debug;
-use soroban_env_common::{
-    xdr::{ScErrorCode, ScErrorType},
-    ConversionError, TryFromVal, U32Val, Val,
-};
 use std::{
     cell::{Ref, RefCell, RefMut},
     ops::DerefMut,
@@ -435,3 +436,130 @@ macro_rules! err {
         }
     };
 }
+
+/// ErrorValueEncoding describes policies for dealing with the `Error` type when
+/// it's used as an argument to a host function or contract function. In general
+/// `Error` is not allowed as an argument, and `Ok(Error)` is not allowed as a
+/// return result -- i.e. a returned `Error` should become an `Err(...)` result
+/// -- but in some cases we make exceptions to this general rule.
+pub(crate) trait ErrorValueEncoding: Sized {
+    const CAN_BE_FALLIBLE: bool = false;
+    fn filter_error_input(self, _host: &Host) -> Result<Self, HostError> {
+        Ok(self)
+    }
+    fn encode_error_return(self, _host: &Host, _fallible: bool) -> Result<Self, HostError> {
+        Ok(self)
+    }
+}
+
+// Host function input or return types unrelated to `Val` can't even try to
+// encode `Error`.
+impl ErrorValueEncoding for i64 {}
+impl ErrorValueEncoding for u64 {}
+impl ErrorValueEncoding for StorageType {}
+
+// Any inputs or returns _explicitly_ typed as `Error` can pass through ok.
+impl ErrorValueEncoding for Error {}
+
+// Host function inputs or returns typed as `Val` may try to carry `Error`. We
+// categorically reject it on input. Whether we permit it in return values, or turn
+// it into `Err(...)`, depends on whether the host function was declared
+// fallible or infallible.
+impl ErrorValueEncoding for Val {
+    const CAN_BE_FALLIBLE: bool = true;
+    fn filter_error_input(self, host: &Host) -> Result<Self, HostError> {
+        if let Ok(err) = Error::try_from(self) {
+            Err(host.err(ScErrorType::Value, ScErrorCode::UnexpectedType,
+                "passing Error into function", &[err.to_val()]))
+        } else {
+            Ok(self)
+        }
+    }
+    fn encode_error_return(self, host: &Host, fallible: bool) -> Result<Self, HostError> {
+        if let Ok(err) = Error::try_from(self) {
+            if true {
+                Ok(err.to_val())
+            } else {
+                Err(host.err(ScErrorType::Value, ScErrorCode::UnexpectedType,
+                    "returning Error from infallible function", &[err.to_val()]))
+            }
+        } else {
+            Ok(self)
+        }
+    }
+}
+
+// Host function inputs or returns typed as other `Val` subtypes are trickier.
+// They _shouldn't_ have ever accepted `Error` because it's tag-disjoint --
+// passing `Error` will cause an UnexpectedType error -- but for both inputs and
+// returns it's possible a _bug_ in an incoming type conversion or logic in a
+// host function (or some kind of smuggled-in bad value) might produce a
+// mis-wrapped value -- eg. a `Symbol` wrapper type that's actually carrying an
+// `Error` payload -- and we want to try to catch that, though we consider it an
+// InternalError.
+macro_rules! impl_cautious_error_value_encoding {
+    ($T:ty) => {
+        impl ErrorValueEncoding for $T {
+            const CAN_BE_FALLIBLE: bool = false;
+            fn filter_error_input(self, host: &Host) -> Result<Self, HostError> {
+                if let Ok(err) = Error::try_from(self.to_val()) {
+                    Err(host.err(
+                        ScErrorType::Context,
+                        ScErrorCode::InternalError,
+                        "got Error payload for non-Error type",
+                        &[err.to_val()],
+                    ))
+                } else {
+                    Ok(self)
+                }
+            }
+            fn encode_error_return(self, host: &Host, fallible: bool) -> Result<Self, HostError> {
+                assert!(!fallible);
+                if let Ok(err) = Error::try_from(self.to_val()) {
+                    Err(host.err(
+                        ScErrorType::Context,
+                        ScErrorCode::InternalError,
+                        "got Error payload for non-Error type",
+                        &[err.to_val()],
+                    ))
+                } else {
+                    Ok(self)
+                }
+            }
+        }
+    };
+}
+
+// We need to impl ErrorValueEncoding for every argument and return type
+// that occurs in any host function signature anywhere in env.json. Note
+// that vm::dispatch will not compile if any are missing.
+
+impl_cautious_error_value_encoding!(Symbol);
+
+impl_cautious_error_value_encoding!(AddressObject);
+impl_cautious_error_value_encoding!(BytesObject);
+impl_cautious_error_value_encoding!(DurationObject);
+
+impl_cautious_error_value_encoding!(TimepointObject);
+impl_cautious_error_value_encoding!(SymbolObject);
+impl_cautious_error_value_encoding!(StringObject);
+
+impl_cautious_error_value_encoding!(VecObject);
+impl_cautious_error_value_encoding!(MapObject);
+
+impl_cautious_error_value_encoding!(I64Object);
+impl_cautious_error_value_encoding!(I128Object);
+impl_cautious_error_value_encoding!(I256Object);
+
+impl_cautious_error_value_encoding!(U64Object);
+impl_cautious_error_value_encoding!(U128Object);
+impl_cautious_error_value_encoding!(U256Object);
+
+impl_cautious_error_value_encoding!(U64Val);
+impl_cautious_error_value_encoding!(U256Val);
+impl_cautious_error_value_encoding!(I256Val);
+
+impl_cautious_error_value_encoding!(Void);
+impl_cautious_error_value_encoding!(Bool);
+impl_cautious_error_value_encoding!(U32Val);
+impl_cautious_error_value_encoding!(I32Val);

@@ -41,7 +41,7 @@ macro_rules! generate_host_function_infos {
                     // pattern-repetition matcher so that it will match all such
                     // descriptions.
                     $(#[$fn_attr:meta])*
-                    { $fn_id:literal, fn $func_id:ident $args:tt -> $ret:ty }
+                    { $fn_id:literal, $fallible:literal, fn $func_id:ident $args:tt -> $ret:ty }
                 )*
             }
         )*

@@ -35,7 +35,7 @@ macro_rules! generate_call_emitter_functions {
                     // pattern-repetition matcher so that it will match all such
                     // descriptions.
                     $(#[$fn_attr:meta])*
-                    { $fn_str:literal, fn $fn_id:ident ($($arg:ident:$type:ty),*) -> $ret:ty }
+                    { $fn_str:literal, $fallible:literal, fn $fn_id:ident ($($arg:ident:$type:ty),*) -> $ret:ty }
                 )*
             }
         )*

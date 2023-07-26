@@ -10,8 +10,9 @@ use wasmi::{
     core::{Trap, TrapCode::BadSignature},
     Value,
 };
+use crate::host::error::ErrorValueEncoding;
 
-pub(crate) trait RelativeObjectConversion: WasmiMarshal {
+trait RelativeObjectConversion: WasmiMarshal {
     fn absolute_to_relative(self, _host: &Host) -> Result<Self, HostError> {
         Ok(self)
     }
@@ -105,7 +106,7 @@ macro_rules! generate_dispatch_functions {
                     // pattern-repetition matcher so that it will match all such
                     // descriptions.
                     $(#[$fn_attr:meta])*
-                    { $fn_str:literal, fn $fn_id:ident ($($arg:ident:$type:ty),*) -> $ret:ty }
+                    { $fn_str:literal, $fallible:literal, fn $fn_id:ident ($($arg:ident:$type:ty),*) -> $ret:ty }
                 )*
             }
         )*
@@ -162,10 +163,17 @@ macro_rules! generate_dispatch_functions {
                     // happens to be a natural switching point for that: we have
                     // conversions to and from both Val and i64 / u64 for
                     // wasmi::Value.
-                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::try_marshal_from_relative_value(Value::I64($arg), &host)?),*);
+                    let res: Result<$ret, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::try_marshal_from_relative_value(Value::I64($arg), &host)?.filter_error_input(&host)?),*);
 
                     let res = match res {
                         Ok(ok) => {
+
+                            // Most return types can never be `Error` since they've disjoint tags.
+                            // Some functions return `Val` though, which might be `Error`, and that is
+                            // only sometimes allowed (from "fallible" host functions).
+                            static_assertions::const_assert!(!$fallible || <$ret as ErrorValueEncoding>::CAN_BE_FALLIBLE);
+                            let ok = ok.encode_error_return(&host, $fallible)?;
+
                             let val: Value = ok.marshal_relative_from_self(&host)?;
                             if let Value::I64(v) = val {
                                 Ok((v,))

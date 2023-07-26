@@ -215,7 +215,7 @@ macro_rules! generate_env_trait {
                     // pattern-repetition matcher so that it will match all such
                     // descriptions.
                     $(#[$fn_attr:meta])*
-                    { $fn_str:literal, fn $fn_id:ident $args:tt -> $ret:ty }
+                    { $fn_str:literal, $fallible:literal, fn $fn_id:ident $args:tt -> $ret:ty }
                 )*
             }
         )*
