@@ -100,6 +100,18 @@ impl std::hash::Hash for Vm {
     }
 }
 
+impl Host {
+    pub(crate) fn make_linker(engine: &wasmi::Engine, symbols: &BTreeSet<(&str,&str)>) -> Result<Linker<Host>, HostError> {
+        let mut linker = Linker::new(&engine);
+        for hf in HOST_FUNCTIONS {
+            if symbols.contains(&(hf.mod_str, hf.fn_str)) {
+                (hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le))?;
+            }
+        }
+        Ok(linker)
+    }
+}
+
 impl Vm {
     #[cfg(feature = "testutils")]
     pub fn get_all_host_functions() -> Vec<(&'static str, &'static str, u32)> {
@@ -119,23 +131,12 @@ impl Vm {
         let _span = tracy_span!("Vm::instantiate");
 
         let engine = parsed_module.module.engine();
-        let mut linker = <Linker<Host>>::new(engine);
         let mut store = Store::new(engine, host.clone());
 
         parsed_module.cost_inputs.charge_for_instantiation(host)?;
 
         store.limiter(|host| host);
 
-        let module_imports: BTreeSet<(&str, &str)> = parsed_module
-            .module
-            .imports()
-            .filter(|i| i.ty().func().is_some())
-            .map(|i| {
-                let mod_str = i.module();
-                let fn_str = i.name();
-                (mod_str, fn_str)
-            })
-            .collect();
 
         {
             // We perform link-time protocol version gating here.
@@ -173,21 +174,20 @@ impl Vm {
                 }
                 // We only link the functions that are actually used by the
                 // contract. Linking is quite expensive.
-                if !module_imports.contains(&(hf.mod_str, hf.fn_str)) {
-                    continue;
-                }
-                let func = (hf.wrap)(&mut store);
-                host.map_err(
-                    linker
-                        .define(hf.mod_str, hf.fn_str, func)
-                        .map_err(|le| wasmi::Error::Linker(le)),
-                )?;
+                //if !module_imports.contains(&(hf.mod_str, hf.fn_str)) {
+                //    continue;
+                //}
             }
         }
 
         let not_started_instance = {
             let _span0 = tracy_span!("instantiate module");
-            host.map_err(linker.instantiate(&mut store, &parsed_module.module))?
+            if let Some(linker) = &*host.try_borrow_linker()? {
+                host.map_err(linker.instantiate(&mut store, &parsed_module.module))?
+            } else {
+                let linker = parsed_module.make_linker()?;
+                host.map_err(linker.instantiate(&mut store, &parsed_module.module))?
+            }
         };
 
         let instance = host.map_err(

@@ -1742,8 +1742,10 @@ fn test_classic_account_auth_using_simulation() {
 mod cap_54_55_56 {
 
     use super::*;
+    use crate::xdr::ScVec;
     use more_asserts::assert_lt;
     use pretty_assertions::assert_eq;
+    use soroban_test_wasms::SUM_I32;
 
     // Test that when running on a protocol that supports the ModuleCache, when
     // doing work that would be significantly different under cached instantiation,
@@ -1751,60 +1753,88 @@ mod cap_54_55_56 {
     // actual execution.
     #[test]
     fn test_module_cache_recording_fidelity() {
-        let cd = CreateContractData::new([111; 32], ADD_I32);
-        let mut ledger_info = default_ledger_info();
-        ledger_info.protocol_version = crate::vm::ModuleCache::MIN_LEDGER_VERSION;
-        let host_fn = invoke_contract_host_fn(
-            &cd.contract_address,
-            "add",
-            vec![ScVal::I32(1), ScVal::I32(2)],
-        );
-        let ledger_entries_with_ttl = vec![
-            (
-                cd.wasm_entry.clone(),
-                Some(ledger_info.sequence_number + 100),
-            ),
-            (
-                cd.contract_entry.clone(),
-                Some(ledger_info.sequence_number + 1000),
-            ),
-        ];
-        let res = invoke_host_function_recording_helper(
-            true,
-            &host_fn,
-            &cd.deployer,
-            None,
-            &ledger_info,
-            ledger_entries_with_ttl.clone(),
-            &prng_seed(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(res.invoke_result.unwrap(), ScVal::I32(3));
+        const V_NEW: u32 = crate::vm::ModuleCache::MIN_LEDGER_VERSION;
+        const V_OLD: u32 = V_NEW - 1;
 
-        let resources = res.resources;
-        let auth_entries = res.auth;
+        for proto in [V_OLD, V_NEW] {
+            let add_cd = CreateContractData::new([111; 32], ADD_I32);
+            let sum_cd = CreateContractData::new([222; 32], SUM_I32);
+            let mut ledger_info = default_ledger_info();
+            ledger_info.protocol_version = proto;
+            let host_fn = invoke_contract_host_fn(
+                &sum_cd.contract_address,
+                "sum",
+                vec![
+                    ScVal::Address(add_cd.contract_address.clone()),
+                    ScVal::Vec(Some(ScVec(
+                        vec![
+                            ScVal::I32(1),
+                            ScVal::I32(2),
+                            ScVal::I32(3),
+                            ScVal::I32(4),
+                            ScVal::I32(5),
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    ))),
+                ],
+            );
+            let ledger_entries_with_ttl = vec![
+                (
+                    add_cd.wasm_entry.clone(),
+                    Some(ledger_info.sequence_number + 100),
+                ),
+                (
+                    add_cd.contract_entry.clone(),
+                    Some(ledger_info.sequence_number + 1000),
+                ),
+                (
+                    sum_cd.wasm_entry.clone(),
+                    Some(ledger_info.sequence_number + 100),
+                ),
+                (
+                    sum_cd.contract_entry.clone(),
+                    Some(ledger_info.sequence_number + 1000),
+                ),
+            ];
+            let res = invoke_host_function_recording_helper(
+                true,
+                &host_fn,
+                &sum_cd.deployer,
+                None,
+                &ledger_info,
+                ledger_entries_with_ttl.clone(),
+                &prng_seed(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(res.invoke_result.unwrap(), ScVal::I32(15));
 
-        let res = invoke_host_function_helper(
-            true,
-            &host_fn,
-            &resources,
-            &cd.deployer,
-            auth_entries,
-            &ledger_info,
-            ledger_entries_with_ttl,
-            &prng_seed(),
-        )
-        .unwrap();
-        assert_eq!(res.invoke_result.unwrap(), ScVal::I32(3));
+            let resources = res.resources;
+            let auth_entries = res.auth;
 
-        let insns_recording = resources.instructions as f64;
-        let insns_enforcing = res.budget.get_cpu_insns_consumed().unwrap() as f64;
-        let insns_delta = (insns_recording - insns_enforcing).abs();
-        let rel_delta_pct = 100.0 * (insns_delta / insns_enforcing);
+            let res = invoke_host_function_helper(
+                true,
+                &host_fn,
+                &resources,
+                &sum_cd.deployer,
+                auth_entries,
+                &ledger_info,
+                ledger_entries_with_ttl,
+                &prng_seed(),
+            )
+            .unwrap();
+            assert_eq!(res.invoke_result.unwrap(), ScVal::I32(15));
 
-        // Check that the recording-mode module cache hack puts us within a
-        // half-percent of the right number.
-        assert_lt!(rel_delta_pct, 0.5);
+            dbg!(&resources);
+            let insns_recording = resources.instructions as f64;
+            let insns_enforcing = res.budget.get_cpu_insns_consumed().unwrap() as f64;
+            let insns_delta = (insns_recording - insns_enforcing).abs();
+            let rel_delta_pct = 100.0 * (insns_delta / insns_enforcing);
+
+            // Check that the recording-mode module cache hack puts us within 0.2%
+            // of the right number.
+            assert_lt!(rel_delta_pct, 0.2);
+        }
     }
 }
