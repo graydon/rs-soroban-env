@@ -260,8 +260,75 @@ impl Vm {
         VmInstantiationTimer::new(host.clone());
         let config = get_wasmi_config(host.as_budget())?;
         let engine = wasmi::Engine::new(&config);
-        let parsed_module = ParsedModule::new(host, &engine, wasm, cost_inputs)?;
+        let parsed_module = Self::parse_module(host, &engine, wasm, cost_inputs)?;
         Self::instantiate(host, contract_id, parsed_module)
+    }
+
+    #[cfg(not(any(test, feature = "recording_mode")))]
+    fn parse_module(
+        host: &Host,
+        engine: &wasmi::Engine,
+        wasm: &[u8],
+        cost_inputs: VersionedContractCodeCostInputs,
+    ) -> Result<Rc<ParsedModule>, HostError> {
+        ParsedModule::new(host, engine, wasm, cost_inputs)
+    }
+
+    /// This method exists to support [crate::storage::FootprintMode::Recording]
+    /// when running in protocol versions that feature the [ModuleCache].
+    ///
+    /// There are two ways we can get to here:
+    ///
+    ///   1. When we're running in a protocol that doesn't support the
+    ///   [ModuleCache] at all. In this case, we just parse the module and
+    ///   charge for it as normal.
+    ///
+    ///   2. When we're in a protocol that _does_ support the [ModuleCache] but
+    ///   are _also_ in [crate::storage::FootprintMode::Recording] mode. Then
+    ///   the [ModuleCache] _does not get built_ during host setup (because we
+    ///   have no footprint yet to buid the cache from), so our caller
+    ///   [Host::call_contract_fn] sees no module cache, and so each call winds
+    ///   up calling us here, reparsing each module as it's called, and then
+    ///   throwing it away.
+    ///
+    /// When we are in case 2, we don't want to charge for all those reparses:
+    /// we want to charge only for the post-parse instantiations _as if_ we had
+    /// had the cache. The cache will actually be added in
+    /// [crate::e2e_invoke::invoke_host_function_in_recording_mode] _after_ the
+    /// invocation completes, by reading the storage and parsing all the modules
+    /// in it, in order to charge for parsing each used module _once_ and
+    /// thereby produce a mostly-correct total cost.
+    ///
+    /// We still charge the reparses to the shadow budget, to avoid a DoS risk,
+    /// and we still charge the instantiations to the real budget, to behave the
+    /// same as if we had a cache.
+    ///
+    /// Note that this will only produce "mostly correct" costs for recording in
+    /// the case of normal completion of the contract. If the contract traps or
+    /// otherwise fails to complete, the cost will be incorrect, because the
+    /// cache will not be built and the parse costs will never be charged.
+    ///
+    /// Finally, for those scratching their head about the overall structure:
+    /// all of this happens as a result of the "module cache" not being
+    /// especially cache-like (i.e. not being populated lazily, on-access). It's
+    /// populated all at once, up front, because wasmi does not allow adding
+    /// modules to an engine that's currently running.
+    #[cfg(any(test, feature = "recording_mode"))]
+    fn parse_module(
+        host: &Host,
+        engine: &wasmi::Engine,
+        wasm: &[u8],
+        cost_inputs: VersionedContractCodeCostInputs,
+    ) -> Result<Rc<ParsedModule>, HostError> {
+        use crate::storage::FootprintMode;
+        if host.get_ledger_protocol_version()? >= ModuleCache::MIN_LEDGER_VERSION {
+            if let FootprintMode::Recording(_) = host.try_borrow_storage()?.mode {
+                return host.budget_ref().with_observable_shadow_mode(|| {
+                    ParsedModule::new(host, engine, wasm, cost_inputs)
+                });
+            }
+        }
+        ParsedModule::new(host, engine, wasm, cost_inputs)
     }
 
     pub(crate) fn get_memory(&self, host: &Host) -> Result<Memory, HostError> {
