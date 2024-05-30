@@ -22,7 +22,7 @@ pub(crate) trait RelativeObjectConversion: WasmiMarshal {
     fn relative_to_absolute(self, _host: &Host) -> Result<Self, HostError> {
         Ok(self)
     }
-    fn try_marshal_from_relative_value(v: wasmi::Value, host: &Host) -> Result<Self, Trap> {
+    fn try_marshal_from_relative_value(v: wasmi::Val, host: &Host) -> Result<Self, Trap> {
         let val = Self::try_marshal_from_value(v).ok_or_else(|| {
             Trap::from(HostError::from(Error::from_type_and_code(
                 ScErrorType::Value,
@@ -31,7 +31,7 @@ pub(crate) trait RelativeObjectConversion: WasmiMarshal {
         })?;
         Ok(val.relative_to_absolute(host)?)
     }
-    fn marshal_relative_from_self(self, host: &Host) -> Result<wasmi::Value, Trap> {
+    fn marshal_relative_from_self(self, host: &Host) -> Result<wasmi::Val, Trap> {
         let rel = self.absolute_to_relative(host)?;
         Ok(Self::marshal_from_self(rel))
     }
@@ -229,15 +229,15 @@ macro_rules! generate_dispatch_functions {
                     // being done in those functions, which are metered individually by the implementation.
                     host.charge_budget(ContractCostType::DispatchHostFunction, None)?;
                     let mut vmcaller = VmCaller(Some(caller));
-                    // The odd / seemingly-redundant use of `wasmi::Value` here
+                    // The odd / seemingly-redundant use of `wasmi::Val` here
                     // as intermediates -- rather than just passing Vals --
                     // has to do with the fact that some host functions are
                     // typed as receiving or returning plain _non-val_ i64 or
                     // u64 values. So the call here has to be able to massage
-                    // both types into and out of i64, and `wasmi::Value`
+                    // both types into and out of i64, and `wasmi::Val`
                     // happens to be a natural switching point for that: we have
                     // conversions to and from both Val and i64 / u64 for
-                    // wasmi::Value.
+                    // wasmi::Val.
                     let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_value(Value::I64($arg), &host)?, &host)?),*);
 
                     if host.tracing_enabled()

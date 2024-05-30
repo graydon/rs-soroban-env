@@ -4,7 +4,7 @@ use crate::{
     xdr::ContractCostType,
     Host, HostError,
 };
-use wasmi::{errors, FuelConsumptionMode, FuelCosts, ResourceLimiter};
+use wasmi::{errors, FuelCosts, ResourceLimiter};
 
 pub(crate) struct WasmiLimits {
     pub table_elements: u32,
@@ -105,11 +105,11 @@ impl ResourceLimiter for Host {
 // expected to change much.
 pub(crate) fn load_calibrated_fuel_costs() -> FuelCosts {
     let mut fuel_costs = FuelCosts::default();
-    fuel_costs.base = 1;
-    fuel_costs.entity = 3;
-    fuel_costs.load = 2;
-    fuel_costs.store = 1;
-    fuel_costs.call = 67;
+    // fuel_costs.base = 1;
+    // fuel_costs.entity = 3;
+    // fuel_costs.load = 2;
+    // fuel_costs.store = 1;
+    // fuel_costs.call = 67;
     fuel_costs
 }
 
@@ -131,9 +131,8 @@ pub(crate) fn get_wasmi_config(budget: &Budget) -> Result<wasmi::Config, HostErr
         .wasm_reference_types(false)
         .wasm_tail_call(false)
         .wasm_extended_const(false)
-        .floats(false)
-        .fuel_consumption_mode(FuelConsumptionMode::Eager)
-        .set_fuel_costs(fuel_costs);
+        .floats(false);
+        //.set_fuel_costs(fuel_costs);
 
     Ok(config)
 }

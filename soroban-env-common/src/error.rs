@@ -215,25 +215,32 @@ impl From<wasmi::errors::FuncError> for Error {
 #[cfg(feature = "wasmi")]
 impl From<wasmi::Error> for Error {
     fn from(e: wasmi::Error) -> Self {
+        e.kind().into()
+    }
+}
+
+#[cfg(feature = "wasmi")]
+impl From<&wasmi::errors::ErrorKind> for Error {
+    fn from(e: &wasmi::errors::ErrorKind) -> Self {
         const EXCEEDED_LIMIT: Error =
             Error::from_type_and_code(ScErrorType::Budget, ScErrorCode::ExceededLimit);
         const INDEX_BOUND: Error =
             Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::IndexBounds);
 
         match e {
-            wasmi::Error::Memory(e) => match e {
+            wasmi::errors::ErrorKind::Memory(e) => match e {
                 wasmi::errors::MemoryError::OutOfBoundsAllocation
                 | wasmi::errors::MemoryError::OutOfBoundsGrowth => return EXCEEDED_LIMIT,
                 wasmi::errors::MemoryError::OutOfBoundsAccess => return INDEX_BOUND,
                 _ => (),
             },
-            wasmi::Error::Table(e) => match e {
+            wasmi::errors::ErrorKind::Table(e) => match e {
                 wasmi::errors::TableError::GrowOutOfBounds { .. } => return EXCEEDED_LIMIT,
                 wasmi::errors::TableError::AccessOutOfBounds { .. }
                 | wasmi::errors::TableError::CopyOutOfBounds => return INDEX_BOUND,
                 _ => (),
             },
-            wasmi::Error::Instantiation(e) => match e {
+            wasmi::errors::ErrorKind::Instantiation(e) => match e {
                 wasmi::errors::InstantiationError::Memory(me) => match me {
                     wasmi::errors::MemoryError::OutOfBoundsAllocation
                     | wasmi::errors::MemoryError::OutOfBoundsGrowth => return EXCEEDED_LIMIT,
@@ -248,20 +255,28 @@ impl From<wasmi::Error> for Error {
                 },
                 _ => (),
             },
-            wasmi::Error::Store(e) => {
+            wasmi::errors::ErrorKind::Fuel(e) => {
                 if let wasmi::errors::FuelError::OutOfFuel = e {
                     return EXCEEDED_LIMIT;
                 }
             }
-            wasmi::Error::Trap(trap) => {
-                if let Some(code) = trap.trap_code() {
-                    return code.into();
-                }
+            wasmi::errors::ErrorKind::TrapCode(code) => {
+                    return (*code).into();
             }
-            wasmi::Error::Func(e) => {
-                return e.into();
+            wasmi::errors::ErrorKind::Func(e) => {
+                use wasmi::errors::FuncError::*;
+                // For reasons I don't understand wasmi has decided not to make
+                // this type Clone.
+                let fe = match e {
+                    ExportedFuncNotFound => ExportedFuncNotFound,
+                    MismatchingParameterType => MismatchingParameterType,
+                    MismatchingParameterLen => MismatchingParameterLen,
+                    MismatchingResultType => MismatchingResultType,
+                    MismatchingResultLen => MismatchingResultLen,
+                };
+                return fe.into();
             }
-            wasmi::Error::Global(e) => {
+            wasmi::errors::ErrorKind::Global(e) => {
                 if matches!(e, wasmi::errors::GlobalError::TypeMismatch { .. }) {
                     return Error::from_type_and_code(
                         ScErrorType::WasmVm,

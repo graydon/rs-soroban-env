@@ -512,7 +512,7 @@ impl Vm {
     {
         let store: &mut Store<Host> = &mut *self.store.try_borrow_mut_or_err()?;
         let mut ctx: StoreContextMut<Host> = store.into();
-        let caller: Caller<Host> = Caller::new(&mut ctx, Some(&self.instance));
+        let caller: Caller<Host> = todo!(); //Caller::new(&mut ctx, Some(&self.instance));
         let mut vmcaller: VmCaller<Host> = VmCaller(Some(caller));
         f(&mut vmcaller)
     }

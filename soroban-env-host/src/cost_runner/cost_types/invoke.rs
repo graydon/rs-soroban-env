@@ -1,5 +1,5 @@
 use soroban_env_common::ConversionError;
-use wasmi::Value;
+use wasmi::Val;
 
 use crate::{
     cost_runner::{CostRunner, CostType},
