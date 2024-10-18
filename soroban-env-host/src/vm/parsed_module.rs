@@ -9,6 +9,8 @@ use crate::{
     Host, HostError, DEFAULT_XDR_RW_LIMITS,
 };
 
+use wasmtime;
+
 use wasmi::{Engine, Module};
 
 use super::Vm;
@@ -159,6 +161,23 @@ impl ParsedModule {
         }))
     }
 
+    pub fn compile_with_wasmtime_winch_as_well(wasm_bytes: &[u8]) {
+        let _0 = tracy_span!("wasmtime");
+        let mut config = wasmtime::Config::new();
+        config.strategy(wasmtime::Strategy::Winch);
+        let _1 = tracy_span!("wasmtime::Engine");
+        if let Ok(engine) = wasmtime::Engine::new(&config) {
+            let module_span = tracy_span!("wasmtime::Module");
+            if let Ok(module) = wasmtime::Module::new(&engine, &wasm_bytes) {
+                #[cfg(feature = "tracy")]
+                {
+                    module_span.emit_value(module.text().len() as u64);
+                }
+            }
+        }
+
+    }
+
     pub fn with_import_symbols<T>(
         &self,
         host: &Host,
@@ -216,6 +235,7 @@ impl ParsedModule {
             let _span0 = tracy_span!("parse module");
             host.map_err(Module::new(&engine, wasm))?
         };
+        Self::compile_with_wasmtime_winch_as_well(wasm);
 
         Self::check_max_args(host, &module)?;
         let interface_version = Self::check_meta_section(host, &module)?;

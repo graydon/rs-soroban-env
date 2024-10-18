@@ -52,6 +52,8 @@ ark-serialize = { version = "0.4.2"}
 ark-ff = { version = "0.4.2"}
 ark-ec = { version = "0.4.2"}
 
+wasmtime = { version = "25.0", default-features = false, features = ["runtime", "winch"]}
+
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tracy-client = { version = "0.17.0", features = ["enable", "timer-fallback"], default-features = false, optional = true }
 
