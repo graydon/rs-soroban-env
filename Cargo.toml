@@ -32,6 +32,8 @@ soroban-builtin-sdk-macros = { version = "=22.0.0-rc.2", path = "soroban-builtin
 # NB: this must match the wasmparser version wasmi is using
 wasmparser = "=0.116.1"
 
+wasmtime = { version = "25.0", default-features = false, features = ["runtime", "winch"]}
+
 # NB: When updating, also update the version in rs-soroban-env dev-dependencies
 [workspace.dependencies.stellar-xdr]
 version = "=22.0.0-rc.1.1"

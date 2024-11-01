@@ -368,6 +368,32 @@ impl Host {
         })
     }
 
+    // Wasmtime uses anyhow::Error for its error type which may carry either a
+    // HostError or a wasmtime::Trap, or "something else entirely" since it's a
+    // dyn Error type. This is a somewhat different pattern to what we have in
+    // wasmi.
+    pub(crate) fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
+        match r {
+            Ok(t) => Ok(t),
+            Err(e) => match e.downcast::<HostError>() {
+                Ok(hosterror) => Err(hosterror),
+                Err(e) => {
+                    let e = if let Some(trap) = e.root_cause().downcast_ref::<wasmtime::Trap>() {
+                        self.error(Error::from(*trap), "wasmtime trap", &[])
+                    } else {
+                        self.err(
+                            ScErrorType::WasmVm,
+                            ScErrorCode::InvalidAction,
+                            "wasmtime error",
+                            &[],
+                        )
+                    };
+                    Err(e)
+                }
+            },
+        }
+    }
+
     // Extracts the account id from the given ledger key as address object `Val`.
     // Returns Void for unsupported entries.
     // Useful as a helper for error reporting.

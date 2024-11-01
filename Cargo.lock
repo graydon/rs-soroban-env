@@ -1816,6 +1816,7 @@ dependencies = [
  "stellar-xdr",
  "tracy-client",
  "wasmparser 0.116.1",
+ "wasmtime",
 ]
 
 [[package]]

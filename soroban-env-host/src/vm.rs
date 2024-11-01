@@ -111,6 +111,19 @@ impl Host {
         }
         Ok(linker)
     }
+
+    pub(crate) fn make_winch_linker(host: &Host,
+        engine: &wasmtime::Engine,
+        symbols: &BTreeSet<(&str, &str)>,
+    ) -> Result<wasmtime::Linker<Host>, HostError> {
+        let mut linker = wasmtime::Linker::new(engine);
+        for hf in HOST_FUNCTIONS {
+            if symbols.contains(&(hf.mod_str, hf.fn_str)) {
+                host.map_wasmtime_error((hf.wrap_winch)(&mut linker))?;
+            }
+        }
+        Ok(linker)
+    }
 }
 
 // In one very narrow context -- when recording, and with a module cache -- we

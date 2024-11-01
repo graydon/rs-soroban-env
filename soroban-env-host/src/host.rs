@@ -88,6 +88,7 @@ pub(crate) const MIN_LEDGER_PROTOCOL_VERSION: u32 = 22;
 struct HostImpl {
     module_cache: RefCell<Option<ModuleCache>>,
     shared_linker: RefCell<Option<wasmi::Linker<Host>>>,
+    shared_winch_linker: RefCell<Option<wasmtime::Linker<Host>>>,
     source_account: RefCell<Option<AccountId>>,
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<HostObject>>,
@@ -214,6 +215,12 @@ impl_checked_borrow_helpers!(
     Option<wasmi::Linker<Host>>,
     try_borrow_linker,
     try_borrow_linker_mut
+);
+impl_checked_borrow_helpers!(
+    shared_winch_linker,
+    Option<wasmtime::Linker<Host>>,
+    try_borrow_winch_linker,
+    try_borrow_winch_linker_mut
 );
 impl_checked_borrow_helpers!(
     source_account,
@@ -353,6 +360,7 @@ impl Host {
         Self(Rc::new(HostImpl {
             module_cache: RefCell::new(None),
             shared_linker: RefCell::new(None),
+            shared_winch_linker: RefCell::new(None),
             source_account: RefCell::new(None),
             ledger: RefCell::new(None),
             objects: Default::default(),
