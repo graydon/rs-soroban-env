@@ -222,7 +222,8 @@ macro_rules! generate_dispatch_functions {
                     // This is where the VM -> Host boundary is crossed.
                     // We first return all fuels from the VM back to the host such that
                     // the host maintains control of the budget.
-                    FuelRefillable::return_fuel_to_host(&mut caller, &host).map_err(|he| Trap::from(he))?;
+                    let last_fuel = host.get_last_vm_fuel()?;
+                    FuelRefillable::return_fuel_to_host(&mut caller, &host, last_fuel).map_err(|he| Trap::from(he))?;
 
                     // Charge for the host function dispatching: conversion between VM fuel and
                     // host budget, marshalling values. This does not account for the actual work
@@ -279,7 +280,8 @@ macro_rules! generate_dispatch_functions {
                     // This is where the Host->VM boundary is crossed.
                     // We supply the remaining host budget as fuel to the VM.
                     let caller = vmcaller.try_mut().map_err(|e| Trap::from(HostError::from(e)))?;
-                    FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| Trap::from(he))?;
+                    let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| Trap::from(he))?;
+                    host.set_last_vm_fuel(added_fuel)?;
 
                     res
                 }
@@ -359,7 +361,7 @@ pub(crate) mod winch {
                 // expansion, flattening all functions from all 'mod' blocks
                 // into a set of functions.
                 $(#[$fn_attr])*
-                pub(crate) fn $fn_id(caller: wasmtime::Caller<'_, Host>, $($arg:i64),*) ->
+                pub(crate) fn $fn_id(mut caller: wasmtime::Caller<'_, Host>, $($arg:i64),*) ->
                     Result<(i64,), wasmtime::Error>
                 {
                     let _span = tracy_span!(core::stringify!($fn_id));
@@ -391,8 +393,8 @@ pub(crate) mod winch {
                     // We first return all fuels from the VM back to the host such that
                     // the host maintains control of the budget.
 
-                    // FIXME:
-                    //FuelRefillable::return_fuel_to_host(&mut caller, &host).map_err(|he| Trap::from(he))?;
+                    let last_fuel = host.get_last_vm_fuel()?;
+                    FuelRefillable::return_fuel_to_host(&mut caller, &host, last_fuel).map_err(|he| Trap::from(he))?;
 
                     // Charge for the host function dispatching: conversion between VM fuel and
                     // host budget, marshalling values. This does not account for the actual work
@@ -451,7 +453,8 @@ pub(crate) mod winch {
                     // This is where the Host->VM boundary is crossed.
                     // We supply the remaining host budget as fuel to the VM.
                     let caller = vmcaller.try_mut().map_err(|e| Trap::from(HostError::from(e)))?;
-                    FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| Trap::from(he))?;
+                    let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| Trap::from(he))?;
+                    host.set_last_vm_fuel(added_fuel)?;
 
                     Ok(res?)
                 }

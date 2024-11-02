@@ -258,15 +258,14 @@ impl Vm {
         let winch_engine = parsed_module.winch_module.engine();
         let mut winch_store = wasmtime::Store::new(&winch_engine, host.clone());
         let winch_instance = host.map_wasmtime_error(
-            winch_linker
-                .instantiate(&mut winch_store, &parsed_module.winch_module),
+            winch_linker.instantiate(&mut winch_store, &parsed_module.winch_module),
         )?;
-        let winch_memory = if let Some(ext) = winch_instance.get_export(&mut winch_store, "memory") {
+        let winch_memory = if let Some(ext) = winch_instance.get_export(&mut winch_store, "memory")
+        {
             ext.into_memory()
         } else {
             None
         };
-
 
         // Here we do _not_ supply the store with any fuel. Fuel is supplied
         // right before the VM is being run, i.e., before crossing the host->VM
@@ -290,7 +289,10 @@ impl Vm {
     ) -> Result<Rc<Self>, HostError> {
         let _span = tracy_span!("Vm::from_parsed_module");
         VmInstantiationTimer::new(host.clone());
-        if let (Some(linker), Some(winch_linker)) = (&*host.try_borrow_linker()?, &*host.try_borrow_winch_linker()?) {
+        if let (Some(linker), Some(winch_linker)) = (
+            &*host.try_borrow_linker()?,
+            &*host.try_borrow_winch_linker()?,
+        ) {
             Self::instantiate(host, contract_id, parsed_module, linker, winch_linker)
         } else {
             let linker = parsed_module.make_linker(host)?;
@@ -421,6 +423,18 @@ impl Vm {
         }
     }
 
+    pub(crate) fn get_winch_memory(&self, host: &Host) -> Result<wasmtime::Memory, HostError> {
+        match self.winch_memory {
+            Some(mem) => Ok(mem),
+            None => Err(host.err(
+                ScErrorType::WasmVm,
+                ScErrorCode::MissingValue,
+                "no linear memory named `memory`",
+                &[],
+            )),
+        }
+    }
+
     // Wrapper for the [`Func`] call which is metered as a component.
     // Resolves the function entity, and takes care the conversion between and
     // tranfering of the host budget / VM fuel. This is where the host->VM->host
@@ -477,7 +491,9 @@ impl Vm {
 
         // call the function
         let mut wasm_ret: [Value; 1] = [Value::I64(0)];
-        self.store.try_borrow_mut_or_err()?.add_fuel_to_vm(host)?;
+        let added_fuel = self.store.try_borrow_mut_or_err()?.add_fuel_to_vm(host)?;
+        host.set_last_vm_fuel(added_fuel)?;
+
         // Metering: the `func.call` will trigger `wasmi::Call` (or `CallIndirect`) instruction,
         // which is technically covered by wasmi fuel metering. So we are double charging a bit
         // here (by a few 100s cpu insns). It is better to be safe.
@@ -491,9 +507,10 @@ impl Vm {
         // wasmi instruction) remaining when the `OutOfFuel` trap occurs. This is only observable
         // if the contract traps with `OutOfFuel`, which may appear confusing if they look closely
         // at the budget amount consumed. So it should be fine.
+        let last_fuel = host.get_last_vm_fuel()?;
         self.store
             .try_borrow_mut_or_err()?
-            .return_fuel_to_host(host)?;
+            .return_fuel_to_host(host, last_fuel)?;
 
         if let Err(e) = res {
             use std::borrow::Cow;
@@ -539,6 +556,83 @@ impl Vm {
         host.relative_to_absolute(
             Val::try_marshal_from_value(wasm_ret[0].clone()).ok_or(ConversionError)?,
         )
+    }
+
+    pub(crate) fn metered_winch_func_call(
+        self: &Rc<Self>,
+        host: &Host,
+        func_sym: &Symbol,
+        inputs: &[wasmtime::Val],
+        treat_missing_function_as_noop: bool,
+    ) -> Result<wasmtime::Val, HostError> {
+        host.charge_budget(ContractCostType::InvokeVmFunction, None)?;
+
+        // resolve the function entity to be called
+        let func_ss: SymbolStr = func_sym.try_into_val(host)?;
+        let ext = match self.winch_instance.get_export(
+            &mut *self.winch_store.try_borrow_mut_or_err()?,
+            func_ss.as_ref(),
+        ) {
+            None => {
+                if treat_missing_function_as_noop {
+                    return Ok(wasmtime::Val::I64(0));
+                } else {
+                    return Err(host.err(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::MissingValue,
+                        "trying to invoke non-existent contract function",
+                        &[func_sym.to_val()],
+                    ));
+                }
+            }
+            Some(e) => e,
+        };
+        let func = match ext.into_func() {
+            None => {
+                return Err(host.err(
+                    ScErrorType::WasmVm,
+                    ScErrorCode::UnexpectedType,
+                    "trying to invoke Wasm export that is not a function",
+                    &[func_sym.to_val()],
+                ))
+            }
+            Some(e) => e,
+        };
+
+        if inputs.len() > Vm::MAX_VM_ARGS {
+            return Err(host.err(
+                ScErrorType::WasmVm,
+                ScErrorCode::InvalidInput,
+                "Too many arguments in Wasm invocation",
+                &[func_sym.to_val()],
+            ));
+        }
+
+        // call the function
+        let mut wasm_ret: [wasmtime::Val; 1] = [wasmtime::Val::I64(0)];
+        let added_fuel = self
+            .winch_store
+            .try_borrow_mut_or_err()?
+            .add_fuel_to_vm(host)?;
+        host.set_last_vm_fuel(added_fuel)?;
+
+        let res = func.call(
+            &mut *self.winch_store.try_borrow_mut_or_err()?,
+            inputs,
+            &mut wasm_ret,
+        );
+
+        let last_fuel = host.get_last_vm_fuel()?;
+        self.winch_store
+            .try_borrow_mut_or_err()?
+            .return_fuel_to_host(host, last_fuel)?;
+
+        if let Err(e) = res {
+            // FIXME: this needs to be fairly careful about correct propagation.
+            // currently we're just doing a crude downcast attempt.
+            return host.map_wasmtime_error(Err(e));
+        }
+        Ok(wasm_ret[0].clone())
     }
 
     pub(crate) fn invoke_function_raw(

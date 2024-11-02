@@ -89,6 +89,7 @@ struct HostImpl {
     module_cache: RefCell<Option<ModuleCache>>,
     shared_linker: RefCell<Option<wasmi::Linker<Host>>>,
     shared_winch_linker: RefCell<Option<wasmtime::Linker<Host>>>,
+    last_vm_fuel: RefCell<u64>,
     source_account: RefCell<Option<AccountId>>,
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<HostObject>>,
@@ -221,6 +222,12 @@ impl_checked_borrow_helpers!(
     Option<wasmtime::Linker<Host>>,
     try_borrow_winch_linker,
     try_borrow_winch_linker_mut
+);
+impl_checked_borrow_helpers!(
+    last_vm_fuel,
+    u64,
+    try_borrow_last_vm_fuel,
+    try_borrow_last_vm_fuel_mut
 );
 impl_checked_borrow_helpers!(
     source_account,
@@ -361,6 +368,7 @@ impl Host {
             module_cache: RefCell::new(None),
             shared_linker: RefCell::new(None),
             shared_winch_linker: RefCell::new(None),
+            last_vm_fuel: RefCell::new(0),
             source_account: RefCell::new(None),
             ledger: RefCell::new(None),
             objects: Default::default(),
@@ -400,6 +408,15 @@ impl Host {
             *self.try_borrow_module_cache_mut()? = Some(cache);
             *self.try_borrow_linker_mut()? = Some(linker);
         }
+        Ok(())
+    }
+
+    pub fn get_last_vm_fuel(&self) -> Result<u64, HostError> {
+        Ok(*self.try_borrow_last_vm_fuel()?)
+    }
+
+    pub fn set_last_vm_fuel(&self, fuel: u64) -> Result<(), HostError> {
+        *self.try_borrow_last_vm_fuel_mut()? = fuel;
         Ok(())
     }
 

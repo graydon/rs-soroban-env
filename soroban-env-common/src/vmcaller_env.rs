@@ -31,7 +31,7 @@ pub enum VmCaller<'a, T> {
     WasmiCaller(wasmi::Caller<'a, T>),
     #[cfg(feature = "wasmtime")]
     WasmtimeCaller(wasmtime::Caller<'a, T>),
-    NoCaller
+    NoCaller,
 }
 #[cfg(any(feature = "wasmi", feature = "wasmtime"))]
 impl<'a, T> VmCaller<'a, T> {
