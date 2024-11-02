@@ -1,8 +1,12 @@
 use crate::{
-    err, host::metered_clone::MeteredContainer, meta, xdr::{
+    err,
+    host::metered_clone::MeteredContainer,
+    meta,
+    xdr::{
         ContractCostType, Limited, ReadXdr, ScEnvMetaEntry, ScEnvMetaEntryInterfaceVersion,
         ScErrorCode, ScErrorType,
-    }, Host, HostError, DEFAULT_XDR_RW_LIMITS
+    },
+    Host, HostError, DEFAULT_XDR_RW_LIMITS,
 };
 
 use sha2::Sha256;
@@ -138,6 +142,7 @@ impl VersionedContractCodeCostInputs {
 /// from the module when it was parsed.
 pub struct ParsedModule {
     pub module: Module,
+    pub winch_module: wasmtime::Module,
     pub proto_version: u32,
     pub cost_inputs: VersionedContractCodeCostInputs,
 }
@@ -146,60 +151,60 @@ impl ParsedModule {
     pub fn new(
         host: &Host,
         engine: &Engine,
+        winch_engine: &wasmtime::Engine,
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
     ) -> Result<Rc<Self>, HostError> {
         cost_inputs.charge_for_parsing(host)?;
-        let (module, proto_version) = Self::parse_wasm(host, engine, wasm)?;
+        let (module, winch_module, proto_version) =
+            Self::parse_wasm(host, engine, winch_engine, wasm)?;
         Ok(Rc::new(Self {
             module,
+            winch_module,
             proto_version,
             cost_inputs,
         }))
     }
 
-    pub fn populate_or_retreve_cached_wasmtime_winch_module(wasm_bytes: &[u8]) {
-        let _0 = tracy_span!("wasmtime");
-        let mut config = wasmtime::Config::new();
-        config.strategy(wasmtime::Strategy::Winch);
-        let _1 = tracy_span!("wasmtime::Engine");
-        if let Ok(engine) = wasmtime::Engine::new(&config) {
-            let mut path = std::env::temp_dir();
-            path.push("soroban-contracts");
-            if !path.exists() {
-                std::fs::create_dir_all(&path).unwrap();
-            }
-            let mod_hash: [u8; 32] = <Sha256 as sha2::Digest>::digest(wasm_bytes).into();
-            let mod_hex = hex::encode(mod_hash);
-            path.push(mod_hex);
-            path.set_extension("winch");
+    pub fn populate_or_retreve_cached_wasmtime_winch_module(
+        host: &Host,
+        wasm_bytes: &[u8],
+        engine: &wasmtime::Engine,
+    ) -> Result<wasmtime::Module, HostError> {
+        let mut path = std::env::temp_dir();
+        path.push("soroban-contracts");
+        if !path.exists() {
+            std::fs::create_dir_all(&path).unwrap();
+        }
+        let mod_hash: [u8; 32] = <Sha256 as sha2::Digest>::digest(wasm_bytes).into();
+        let mod_hex = hex::encode(mod_hash);
+        path.push(mod_hex);
+        path.set_extension("winch");
+        if path.exists() {
+            let _2 = tracy_span!("std::fs::read");
+            let winch_bytes = host.map_io_error(std::fs::read(&path))?;
+            let deserialize_span = tracy_span!("wasmtime::Module::deserialize");
+            let module = host.map_wasmtime_error(unsafe {
+                wasmtime::Module::deserialize(&engine, &winch_bytes)
+            })?;
+
+            #[cfg(feature = "tracy")]
             {
-                if path.exists() {
-                    let _2 = tracy_span!("std::fs::read");
-                    if let Ok(winch_bytes) = std::fs::read(&path) {
-                        let deserialize_span = tracy_span!("wasmtime::Module::deserialize");
-                        if let Ok(module) = unsafe { wasmtime::Module::deserialize(&engine, &winch_bytes) } {
-                            #[cfg(feature = "tracy")]
-                            {
-                                deserialize_span.emit_value(module.text().len() as u64);
-                            }
-                        }
-                    }
-                } else {
-                    let _2 = tracy_span!("wasmtime::Module::new");
-                    if let Ok(module) = wasmtime::Module::new(&engine, &wasm_bytes) {
-                        let serialize_span = tracy_span!("wasmtime::Module::serialize");
-                        if let Ok(winch_bytes) = module.serialize() {
-                            #[cfg(feature = "tracy")]
-                            {
-                                serialize_span.emit_value(winch_bytes.len() as u64);
-                            }
-                            let _3 = tracy_span!("std::fs::write");
-                            std::fs::write(&path, &winch_bytes).unwrap();
-                        }
-                    }
-                }
+                deserialize_span.emit_value(module.text().len() as u64);
             }
+            Ok(module)
+        } else {
+            let _2 = tracy_span!("wasmtime::Module::new");
+            let module = host.map_wasmtime_error(wasmtime::Module::new(&engine, &wasm_bytes))?;
+            let serialize_span = tracy_span!("wasmtime::Module::serialize");
+            let winch_bytes = host.map_wasmtime_error(module.serialize())?;
+            #[cfg(feature = "tracy")]
+            {
+                serialize_span.emit_value(winch_bytes.len() as u64);
+            }
+            let _3 = tracy_span!("std::fs::write");
+            host.map_io_error(std::fs::write(&path, &winch_bytes))?;
+            Ok(module)
         }
     }
 
@@ -251,22 +256,33 @@ impl ParsedModule {
         use crate::budget::AsBudget;
         let config = crate::vm::get_wasmi_config(host.as_budget())?;
         let engine = Engine::new(&config);
-        Self::new(host, &engine, wasm, cost_inputs)
+
+        let mut winch_config = wasmtime::Config::new();
+        winch_config.strategy(wasmtime::Strategy::Winch);
+        let winch_engine = host.map_wasmtime_error(wasmtime::Engine::new(&winch_config))?;
+
+        Self::new(host, &engine, &winch_engine, wasm, cost_inputs)
     }
 
     /// Parse the Wasm blob into a [Module] and its protocol number, checking its interface version
-    fn parse_wasm(host: &Host, engine: &Engine, wasm: &[u8]) -> Result<(Module, u32), HostError> {
+    fn parse_wasm(
+        host: &Host,
+        engine: &Engine,
+        winch_engine: &wasmtime::Engine,
+        wasm: &[u8],
+    ) -> Result<(Module, wasmtime::Module, u32), HostError> {
         let module = {
             let _span0 = tracy_span!("parse module");
             host.map_err(Module::new(&engine, wasm))?
         };
-        Self::populate_or_retreve_cached_wasmtime_winch_module(wasm);
+        let winch_module =
+            Self::populate_or_retreve_cached_wasmtime_winch_module(host, wasm, winch_engine)?;
 
         Self::check_max_args(host, &module)?;
         let interface_version = Self::check_meta_section(host, &module)?;
         let contract_proto = interface_version.protocol;
 
-        Ok((module, contract_proto))
+        Ok((module, winch_module, contract_proto))
     }
 
     fn check_contract_interface_version(

@@ -23,7 +23,8 @@ pub(crate) struct HostFuncInfo {
     /// Function that takes a wasmtime::Linker and adds a dispatch function
     /// for this host function, with the specific type of the dispatch function,
     /// into a Func in the Linker.
-    pub(crate) wrap_winch: fn(&mut wasmtime::Linker<Host>) -> Result<&mut wasmtime::Linker<Host>, wasmtime::Error>,
+    pub(crate) wrap_winch:
+        fn(&mut wasmtime::Linker<Host>) -> Result<&mut wasmtime::Linker<Host>, wasmtime::Error>,
 
     /// Minimal supported protocol version of this host function
     pub(crate) min_proto: Option<u32>,

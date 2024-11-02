@@ -112,7 +112,8 @@ impl Host {
         Ok(linker)
     }
 
-    pub(crate) fn make_winch_linker(host: &Host,
+    pub(crate) fn make_winch_linker(
+        host: &Host,
         engine: &wasmtime::Engine,
         symbols: &BTreeSet<(&str, &str)>,
     ) -> Result<wasmtime::Linker<Host>, HostError> {

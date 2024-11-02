@@ -19,6 +19,7 @@ use wasmi::Engine;
 #[derive(Clone, Default)]
 pub struct ModuleCache {
     pub(crate) engine: Engine,
+    pub(crate) winch_engine: wasmtime::Engine,
     modules: MeteredOrdMap<Hash, Rc<ParsedModule>, Host>,
 }
 
@@ -26,8 +27,17 @@ impl ModuleCache {
     pub fn new(host: &Host) -> Result<Self, HostError> {
         let config = get_wasmi_config(host.as_budget())?;
         let engine = Engine::new(&config);
+
+        let mut winch_config = wasmtime::Config::new();
+        winch_config.strategy(wasmtime::Strategy::Winch);
+        let winch_engine = host.map_wasmtime_error(wasmtime::Engine::new(&winch_config))?;
+
         let modules = MeteredOrdMap::new();
-        let mut cache = Self { engine, modules };
+        let mut cache = Self {
+            engine,
+            winch_engine,
+            modules,
+        };
         cache.add_stored_contracts(host)?;
         Ok(cache)
     }
@@ -96,7 +106,8 @@ impl ModuleCache {
                 &[],
             ));
         }
-        let parsed_module = ParsedModule::new(host, &self.engine, &wasm, cost_inputs)?;
+        let parsed_module =
+            ParsedModule::new(host, &self.engine, &self.winch_engine, &wasm, cost_inputs)?;
         self.modules =
             self.modules
                 .insert(contract_id.metered_clone(host)?, parsed_module, host)?;
@@ -133,6 +144,12 @@ impl ModuleCache {
 
     pub fn make_linker(&self, host: &Host) -> Result<wasmi::Linker<Host>, HostError> {
         self.with_import_symbols(host, |symbols| Host::make_linker(&self.engine, symbols))
+    }
+
+    pub fn make_winch_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
+        self.with_import_symbols(host, |symbols| {
+            Host::make_winch_linker(host, &self.winch_engine, symbols)
+        })
     }
 
     pub fn get_module(

@@ -289,19 +289,23 @@ impl From<wasmtime::Trap> for Error {
         let ec = match trap {
             wasmtime::Trap::UnreachableCodeReached => ScErrorCode::InvalidAction,
 
-            wasmtime::Trap::MemoryOutOfBounds
-            | wasmtime::Trap::TableOutOfBounds => ScErrorCode::IndexBounds,
+            wasmtime::Trap::MemoryOutOfBounds | wasmtime::Trap::TableOutOfBounds => {
+                ScErrorCode::IndexBounds
+            }
 
-            | wasmtime::Trap::IndirectCallToNull => ScErrorCode::MissingValue,
+            wasmtime::Trap::IndirectCallToNull => ScErrorCode::MissingValue,
 
-            wasmtime::Trap::IntegerDivisionByZero 
+            wasmtime::Trap::IntegerDivisionByZero
             | wasmtime::Trap::IntegerOverflow
             | wasmtime::Trap::BadConversionToInteger => ScErrorCode::ArithDomain,
 
             wasmtime::Trap::BadSignature => ScErrorCode::UnexpectedType,
 
-            wasmtime::Trap::StackOverflow | wasmtime::Trap::Interrupt | wasmtime::Trap::OutOfFuel =>
-                return Error::from_type_and_code(ScErrorType::Budget, ScErrorCode::ExceededLimit),
+            wasmtime::Trap::StackOverflow
+            | wasmtime::Trap::Interrupt
+            | wasmtime::Trap::OutOfFuel => {
+                return Error::from_type_and_code(ScErrorType::Budget, ScErrorCode::ExceededLimit)
+            }
 
             wasmtime::Trap::HeapMisaligned
             | wasmtime::Trap::AlwaysTrapAdapter

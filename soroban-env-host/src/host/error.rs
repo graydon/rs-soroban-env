@@ -372,7 +372,10 @@ impl Host {
     // HostError or a wasmtime::Trap, or "something else entirely" since it's a
     // dyn Error type. This is a somewhat different pattern to what we have in
     // wasmi.
-    pub(crate) fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
+    pub(crate) fn map_wasmtime_error<T>(
+        &self,
+        r: Result<T, wasmtime::Error>,
+    ) -> Result<T, HostError> {
         match r {
             Ok(t) => Ok(t),
             Err(e) => match e.downcast::<HostError>() {
@@ -392,6 +395,18 @@ impl Host {
                 }
             },
         }
+    }
+
+    // FIXME: remove this, it's just temporary while caching winch contracts in the filesystem
+    pub(crate) fn map_io_error<T>(&self, iores: Result<T, std::io::Error>) -> Result<T, HostError> {
+        iores.map_err(|e| {
+            self.err(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+                &format!("io error: {}", e),
+                &[],
+            )
+        })
     }
 
     // Extracts the account id from the given ledger key as address object `Val`.
