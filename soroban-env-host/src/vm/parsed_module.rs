@@ -248,6 +248,12 @@ impl ParsedModule {
         })
     }
 
+    pub fn make_winch_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
+        self.with_import_symbols(host, |symbols| {
+            Host::make_winch_linker(host, self.winch_module.engine(), symbols)
+        })
+    }
+
     pub fn new_with_isolated_engine(
         host: &Host,
         wasm: &[u8],

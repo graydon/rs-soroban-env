@@ -228,7 +228,7 @@ macro_rules! generate_dispatch_functions {
                     // host budget, marshalling values. This does not account for the actual work
                     // being done in those functions, which are metered individually by the implementation.
                     host.charge_budget(ContractCostType::DispatchHostFunction, None)?;
-                    let mut vmcaller = VmCaller(Some(caller));
+                    let mut vmcaller = VmCaller::WasmiCaller(caller);
                     // The odd / seemingly-redundant use of `wasmi::Value` here
                     // as intermediates -- rather than just passing Vals --
                     // has to do with the fact that some host functions are
@@ -399,9 +399,7 @@ pub(crate) mod winch {
                     // being done in those functions, which are metered individually by the implementation.
                     host.charge_budget(ContractCostType::DispatchHostFunction, None)?;
 
-                    // FIXME:
-                    // let mut vmcaller = VmCaller(Some(caller));
-                    let mut vmcaller = VmCaller(None);
+                    let mut vmcaller = VmCaller::WasmtimeCaller(caller);
 
                     // The odd / seemingly-redundant use of `wasmi::Value` here
                     // as intermediates -- rather than just passing Vals --

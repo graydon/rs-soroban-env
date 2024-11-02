@@ -25,26 +25,54 @@ use core::marker::PhantomData;
 /// contract) to call host methods without having to write `VmCaller::none()`
 /// everywhere.
 
-#[cfg(feature = "wasmi")]
-pub struct VmCaller<'a, T>(pub Option<wasmi::Caller<'a, T>>);
-#[cfg(feature = "wasmi")]
+#[cfg(any(feature = "wasmi", feature = "wasmtime"))]
+pub enum VmCaller<'a, T> {
+    #[cfg(feature = "wasmi")]
+    WasmiCaller(wasmi::Caller<'a, T>),
+    #[cfg(feature = "wasmtime")]
+    WasmtimeCaller(wasmtime::Caller<'a, T>),
+    NoCaller
+}
+#[cfg(any(feature = "wasmi", feature = "wasmtime"))]
 impl<'a, T> VmCaller<'a, T> {
     pub fn none() -> Self {
-        VmCaller(None)
+        VmCaller::NoCaller
     }
+    #[cfg(feature = "wasmi")]
     pub fn try_ref(&self) -> Result<&wasmi::Caller<'a, T>, Error> {
-        match &self.0 {
-            Some(caller) => Ok(caller),
-            None => Err(Error::from_type_and_code(
+        match self {
+            VmCaller::WasmiCaller(caller) => Ok(caller),
+            _ => Err(Error::from_type_and_code(
                 ScErrorType::Context,
                 ScErrorCode::InternalError,
             )),
         }
     }
+    #[cfg(feature = "wasmi")]
     pub fn try_mut(&mut self) -> Result<&mut wasmi::Caller<'a, T>, Error> {
-        match &mut self.0 {
-            Some(caller) => Ok(caller),
-            None => Err(Error::from_type_and_code(
+        match self {
+            VmCaller::WasmiCaller(caller) => Ok(caller),
+            _ => Err(Error::from_type_and_code(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+            )),
+        }
+    }
+    #[cfg(feature = "wasmtime")]
+    pub fn try_ref_winch(&self) -> Result<&wasmtime::Caller<'a, T>, Error> {
+        match self {
+            VmCaller::WasmtimeCaller(caller) => Ok(caller),
+            _ => Err(Error::from_type_and_code(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+            )),
+        }
+    }
+    #[cfg(feature = "wasmtime")]
+    pub fn try_mut_winch(&mut self) -> Result<&mut wasmtime::Caller<'a, T>, Error> {
+        match self {
+            VmCaller::WasmtimeCaller(caller) => Ok(caller),
+            _ => Err(Error::from_type_and_code(
                 ScErrorType::Context,
                 ScErrorCode::InternalError,
             )),
@@ -52,11 +80,11 @@ impl<'a, T> VmCaller<'a, T> {
     }
 }
 
-#[cfg(not(feature = "wasmi"))]
+#[cfg(not(any(feature = "wasmi", feature = "wasmtime")))]
 pub struct VmCaller<'a, T> {
     _nothing: PhantomData<&'a T>,
 }
-#[cfg(not(feature = "wasmi"))]
+#[cfg(not(any(feature = "wasmi", feature = "wasmtime")))]
 impl<'a, T> VmCaller<'a, T> {
     pub fn none() -> Self {
         VmCaller {

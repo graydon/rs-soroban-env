@@ -90,6 +90,10 @@ pub struct Vm {
     store: RefCell<Store<Host>>,
     instance: Instance,
     pub(crate) memory: Option<Memory>,
+
+    winch_store: RefCell<wasmtime::Store<Host>>,
+    winch_instance: wasmtime::Instance,
+    pub(crate) winch_memory: Option<wasmtime::Memory>,
 }
 
 impl std::hash::Hash for Vm {
@@ -167,6 +171,7 @@ impl Vm {
         contract_id: Hash,
         parsed_module: Rc<ParsedModule>,
         linker: &Linker<Host>,
+        winch_linker: &wasmtime::Linker<Host>,
     ) -> Result<Rc<Self>, HostError> {
         let _span = tracy_span!("Vm::instantiate");
 
@@ -200,7 +205,7 @@ impl Vm {
             //    function is defined in a later protocol, and we replay that
             //    contract (in the earlier protocol where it belongs), we need
             //    to return the same error.
-            let _span0 = tracy_span!("define host functions");
+            let _span0 = tracy_span!("check host function protocol compatibility");
             let ledger_proto = host.with_ledger_info(|li| Ok(li.protocol_version))?;
             parsed_module.with_import_symbols(host, |module_symbols| {
                 for hf in HOST_FUNCTIONS {
@@ -249,6 +254,20 @@ impl Vm {
             None
         };
 
+        // Redo instantiation steps above for winch.
+        let winch_engine = parsed_module.winch_module.engine();
+        let mut winch_store = wasmtime::Store::new(&winch_engine, host.clone());
+        let winch_instance = host.map_wasmtime_error(
+            winch_linker
+                .instantiate(&mut winch_store, &parsed_module.winch_module),
+        )?;
+        let winch_memory = if let Some(ext) = winch_instance.get_export(&mut winch_store, "memory") {
+            ext.into_memory()
+        } else {
+            None
+        };
+
+
         // Here we do _not_ supply the store with any fuel. Fuel is supplied
         // right before the VM is being run, i.e., before crossing the host->VM
         // boundary.
@@ -258,6 +277,9 @@ impl Vm {
             store: RefCell::new(store),
             instance,
             memory,
+            winch_store: RefCell::new(winch_store),
+            winch_instance,
+            winch_memory,
         }))
     }
 
@@ -268,11 +290,12 @@ impl Vm {
     ) -> Result<Rc<Self>, HostError> {
         let _span = tracy_span!("Vm::from_parsed_module");
         VmInstantiationTimer::new(host.clone());
-        if let Some(linker) = &*host.try_borrow_linker()? {
-            Self::instantiate(host, contract_id, parsed_module, linker)
+        if let (Some(linker), Some(winch_linker)) = (&*host.try_borrow_linker()?, &*host.try_borrow_winch_linker()?) {
+            Self::instantiate(host, contract_id, parsed_module, linker, winch_linker)
         } else {
             let linker = parsed_module.make_linker(host)?;
-            Self::instantiate(host, contract_id, parsed_module, &linker)
+            let winch_linker = parsed_module.make_winch_linker(host)?;
+            Self::instantiate(host, contract_id, parsed_module, &linker, &winch_linker)
         }
     }
 
@@ -320,7 +343,8 @@ impl Vm {
         VmInstantiationTimer::new(host.clone());
         let parsed_module = Self::parse_module(host, wasm, cost_inputs, cost_mode)?;
         let linker = parsed_module.make_linker(host)?;
-        Self::instantiate(host, contract_id, parsed_module, &linker)
+        let winch_linker = parsed_module.make_winch_linker(host)?;
+        Self::instantiate(host, contract_id, parsed_module, &linker, &winch_linker)
     }
 
     #[cfg(not(any(test, feature = "recording_mode")))]
@@ -554,7 +578,7 @@ impl Vm {
         let store: &mut Store<Host> = &mut *self.store.try_borrow_mut_or_err()?;
         let mut ctx: StoreContextMut<Host> = store.into();
         let caller: Caller<Host> = Caller::new(&mut ctx, Some(&self.instance));
-        let mut vmcaller: VmCaller<Host> = VmCaller(Some(caller));
+        let mut vmcaller: VmCaller<Host> = VmCaller::WasmiCaller(caller);
         f(&mut vmcaller)
     }
 
