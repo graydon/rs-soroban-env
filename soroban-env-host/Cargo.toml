@@ -15,7 +15,7 @@ exclude = ["observations/"]
 
 [dependencies]
 soroban-builtin-sdk-macros = { workspace = true }
-soroban-env-common = { workspace = true, features = ["std", "wasmi", "shallow-val-hash"] }
+soroban-env-common = { workspace = true, features = ["std", "wasmi", "shallow-val-hash", "wasmtime"] }
 wasmi = { workspace = true }
 wasmparser = { workspace = true }
 stellar-strkey = "0.0.9"
@@ -52,7 +52,7 @@ ark-serialize = { version = "0.4.2"}
 ark-ff = { version = "0.4.2"}
 ark-ec = { version = "0.4.2"}
 
-wasmtime = { workspace = true, optional = true}
+wasmtime = { workspace = true }
 hex = "0.4.3"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]

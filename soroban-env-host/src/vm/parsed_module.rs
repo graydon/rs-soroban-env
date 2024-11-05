@@ -183,6 +183,7 @@ impl ParsedModule {
         if path.exists() {
             let _2 = tracy_span!("std::fs::read");
             let winch_bytes = host.map_io_error(std::fs::read(&path))?;
+            #[cfg(feature = "tracy")]
             let deserialize_span = tracy_span!("wasmtime::Module::deserialize");
             let module = host.map_wasmtime_error(unsafe {
                 wasmtime::Module::deserialize(&engine, &winch_bytes)
@@ -196,6 +197,7 @@ impl ParsedModule {
         } else {
             let _2 = tracy_span!("wasmtime::Module::new");
             let module = host.map_wasmtime_error(wasmtime::Module::new(&engine, &wasm_bytes))?;
+            #[cfg(feature = "tracy")]
             let serialize_span = tracy_span!("wasmtime::Module::serialize");
             let winch_bytes = host.map_wasmtime_error(module.serialize())?;
             #[cfg(feature = "tracy")]
