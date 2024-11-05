@@ -319,6 +319,13 @@ impl From<wasmtime::Trap> for Error {
     }
 }
 
+#[cfg(feature = "wasmtime")]
+impl From<wasmtime::MemoryAccessError> for Error {
+    fn from(_: wasmtime::MemoryAccessError) -> Self {
+        Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::IndexBounds)
+    }
+}
+
 impl Error {
     // NB: we don't provide a "get_type" to avoid casting a bad bit-pattern into
     // an ScErrorType. Instead we provide an "is_type" to check any specific

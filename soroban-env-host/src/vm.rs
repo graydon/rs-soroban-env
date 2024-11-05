@@ -18,6 +18,7 @@ mod parsed_module;
 pub(crate) use dispatch::dummy0;
 #[cfg(test)]
 pub(crate) use dispatch::protocol_gated_dummy;
+use soroban_env_common::WasmtimeMarshal;
 
 use crate::{
     budget::{get_wasmi_config, AsBudget, Budget},
@@ -564,7 +565,7 @@ impl Vm {
         func_sym: &Symbol,
         inputs: &[wasmtime::Val],
         treat_missing_function_as_noop: bool,
-    ) -> Result<wasmtime::Val, HostError> {
+    ) -> Result<Val, HostError> {
         host.charge_budget(ContractCostType::InvokeVmFunction, None)?;
 
         // resolve the function entity to be called
@@ -575,7 +576,7 @@ impl Vm {
         ) {
             None => {
                 if treat_missing_function_as_noop {
-                    return Ok(wasmtime::Val::I64(0));
+                    return Ok(Val::VOID.into());
                 } else {
                     return Err(host.err(
                         ScErrorType::WasmVm,
@@ -632,8 +633,13 @@ impl Vm {
             // currently we're just doing a crude downcast attempt.
             return host.map_wasmtime_error(Err(e));
         }
-        Ok(wasm_ret[0].clone())
+        host.relative_to_absolute(
+            Val::try_marshal_from_wasmtime_value(wasm_ret[0].clone()).ok_or(ConversionError)?,
+        )
     }
+
+    // FIXME: remove when/if we decide to commit to this transition.
+    const FIRST_PROTOCOL_TO_RUN_ON_WINCH: u32 = 21;
 
     pub(crate) fn invoke_function_raw(
         self: &Rc<Self>,
@@ -644,16 +650,32 @@ impl Vm {
     ) -> Result<Val, HostError> {
         let _span = tracy_span!("Vm::invoke_function_raw");
         Vec::<Value>::charge_bulk_init_cpy(args.len() as u64, host.as_budget())?;
-        let wasm_args: Vec<Value> = args
-            .iter()
-            .map(|i| host.absolute_to_relative(*i).map(|v| v.marshal_from_self()))
-            .collect::<Result<Vec<Value>, HostError>>()?;
-        self.metered_func_call(
-            host,
-            func_sym,
-            wasm_args.as_slice(),
-            treat_missing_function_as_noop,
-        )
+        if host.get_ledger_protocol_version()? >= Self::FIRST_PROTOCOL_TO_RUN_ON_WINCH {
+            let winch_args: Vec<wasmtime::Val> = args
+                .iter()
+                .map(|i| {
+                    host.absolute_to_relative(*i)
+                        .map(|v| v.marshal_wasmtime_from_self())
+                })
+                .collect::<Result<Vec<wasmtime::Val>, HostError>>()?;
+            self.metered_winch_func_call(
+                host,
+                func_sym,
+                winch_args.as_slice(),
+                treat_missing_function_as_noop,
+            )
+        } else {
+            let wasm_args: Vec<Value> = args
+                .iter()
+                .map(|i| host.absolute_to_relative(*i).map(|v| v.marshal_from_self()))
+                .collect::<Result<Vec<Value>, HostError>>()?;
+            self.metered_func_call(
+                host,
+                func_sym,
+                wasm_args.as_slice(),
+                treat_missing_function_as_noop,
+            )
+        }
     }
 
     /// Returns the raw bytes content of a named custom section from the WASM
