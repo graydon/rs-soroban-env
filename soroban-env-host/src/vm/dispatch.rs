@@ -452,7 +452,7 @@ pub(crate) mod winch {
 
                     // This is where the Host->VM boundary is crossed.
                     // We supply the remaining host budget as fuel to the VM.
-                    let caller = vmcaller.try_mut().map_err(|e| Trap::from(HostError::from(e)))?;
+                    let caller = vmcaller.try_mut_winch().map_err(|e| Trap::from(HostError::from(e)))?;
                     let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| Trap::from(he))?;
                     host.set_last_vm_fuel(added_fuel)?;
 

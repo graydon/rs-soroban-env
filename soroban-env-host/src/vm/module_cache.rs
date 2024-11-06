@@ -1,6 +1,5 @@
 use super::{
-    func_info::HOST_FUNCTIONS,
-    parsed_module::{ParsedModule, VersionedContractCodeCostInputs},
+    func_info::HOST_FUNCTIONS, get_winch_config, parsed_module::{ParsedModule, VersionedContractCodeCostInputs}
 };
 use crate::{
     budget::{get_wasmi_config, AsBudget},
@@ -28,8 +27,7 @@ impl ModuleCache {
         let config = get_wasmi_config(host.as_budget())?;
         let engine = Engine::new(&config);
 
-        let mut winch_config = wasmtime::Config::new();
-        winch_config.strategy(wasmtime::Strategy::Winch);
+        let winch_config = get_winch_config(host.as_budget())?;
         let winch_engine = host.map_wasmtime_error(wasmtime::Engine::new(&winch_config))?;
 
         let modules = MeteredOrdMap::new();

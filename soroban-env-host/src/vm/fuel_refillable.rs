@@ -50,9 +50,9 @@ pub(crate) trait FuelRefillable {
     // (which was returned from `add_fuel_to_vm`) as an argument, in case the VM
     // does not keep track of its fuel consumption, only remaining balance.
     fn return_fuel_to_host(&mut self, host: &Host, last_fuel: u64) -> Result<(), HostError> {
-        let fuel = self.fuel_consumed(last_fuel)?;
+        let fuel_consumed = self.fuel_consumed(last_fuel)?;
         host.as_budget()
-            .bulk_charge(ContractCostType::WasmInsnExec, fuel, None)?;
+            .bulk_charge(ContractCostType::WasmInsnExec, fuel_consumed, None)?;
         self.reset_fuel()
     }
 }
@@ -90,6 +90,8 @@ impl_refillable_for_store!(Caller<'a, Host>);
 const VM_INTERNAL_ERROR: Error =
     Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InternalError);
 
+const WINCH_FUEL_FACTOR: u64 = 1;
+
 macro_rules! impl_refillable_for_winch_store {
     ($store: ty) => {
         impl<'a> FuelRefillable for $store {
@@ -100,12 +102,13 @@ macro_rules! impl_refillable_for_winch_store {
 
             fn fuel_total(&self) -> Result<u64, HostError> {
                 self.get_fuel()
+                    .map(|fuel| fuel.saturating_div(WINCH_FUEL_FACTOR))
                     .map_err(|_| HostError::from(VM_INTERNAL_ERROR))
             }
 
             fn add_fuel(&mut self, fuel: u64) -> Result<(), HostError> {
                 let existing_fuel = self.fuel_total()?;
-                let new_fuel = existing_fuel.saturating_add(fuel);
+                let new_fuel = existing_fuel.saturating_add(fuel).saturating_mul(WINCH_FUEL_FACTOR);
                 self.set_fuel(new_fuel)
                     .map_err(|_| HostError::from(VM_INTERNAL_ERROR))
             }

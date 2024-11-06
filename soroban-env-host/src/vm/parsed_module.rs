@@ -1,12 +1,8 @@
 use crate::{
-    err,
-    host::metered_clone::MeteredContainer,
-    meta,
-    xdr::{
+    err, host::metered_clone::MeteredContainer, meta, vm::get_winch_config, xdr::{
         ContractCostType, Limited, ReadXdr, ScEnvMetaEntry, ScEnvMetaEntryInterfaceVersion,
         ScErrorCode, ScErrorType,
-    },
-    Host, HostError, DEFAULT_XDR_RW_LIMITS,
+    }, Host, HostError, DEFAULT_XDR_RW_LIMITS
 };
 
 use sha2::Sha256;
@@ -265,8 +261,7 @@ impl ParsedModule {
         let config = crate::vm::get_wasmi_config(host.as_budget())?;
         let engine = Engine::new(&config);
 
-        let mut winch_config = wasmtime::Config::new();
-        winch_config.strategy(wasmtime::Strategy::Winch);
+        let winch_config = get_winch_config(host.as_budget())?;
         let winch_engine = host.map_wasmtime_error(wasmtime::Engine::new(&winch_config))?;
 
         Self::new(host, &engine, &winch_engine, wasm, cost_inputs)

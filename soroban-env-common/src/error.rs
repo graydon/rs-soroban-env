@@ -311,7 +311,6 @@ impl From<wasmtime::Trap> for Error {
             | wasmtime::Trap::AlwaysTrapAdapter
             | wasmtime::Trap::AtomicWaitNonSharedMemory
             | wasmtime::Trap::NullReference
-            | wasmtime::Trap::NullI31Ref
             | wasmtime::Trap::CannotEnterComponent
             | _ => ScErrorCode::InvalidAction,
         };

@@ -21,7 +21,7 @@ pub(crate) use dispatch::protocol_gated_dummy;
 use soroban_env_common::WasmtimeMarshal;
 
 use crate::{
-    budget::{get_wasmi_config, AsBudget, Budget},
+    budget::{get_wasmi_config, get_winch_config, AsBudget, Budget},
     host::{
         error::TryBorrowOrErr,
         metered_clone::MeteredContainer,
