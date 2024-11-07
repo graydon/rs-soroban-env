@@ -182,8 +182,12 @@ impl Vm {
         // diverge.
         host.check_ledger_protocol_supported()?;
 
+        let _wasmi_part = tracy_span!("Vm::instantiate - wasmi part");
+
         let engine = parsed_module.module.engine();
+        let _wasmi_store = tracy_span!("Vm::instantiate - wasmi store");
         let mut store = Store::new(engine, host.clone());
+        std::mem::drop(_wasmi_store);
 
         parsed_module.cost_inputs.charge_for_instantiation(host)?;
 
@@ -239,7 +243,7 @@ impl Vm {
         }
 
         let not_started_instance = {
-            let _span0 = tracy_span!("instantiate module");
+            let _span0 = tracy_span!("Vm::Instantiate - wasmi instantiate");
             host.map_err(linker.instantiate(&mut store, &parsed_module.module))?
         };
 
@@ -254,19 +258,29 @@ impl Vm {
         } else {
             None
         };
+        std::mem::drop(_wasmi_part);
+
+        let _winch_part = tracy_span!("Vm::instantiate - winch part");
 
         // Redo instantiation steps above for winch.
         let winch_engine = parsed_module.winch_module.engine();
+
+        let _winch_store = tracy_span!("Vm::instantiate - winch store");
         let mut winch_store = wasmtime::Store::new(&winch_engine, host.clone());
+        std::mem::drop(_winch_store);
+
+        let _winch_instantiate = tracy_span!("Vm::instantiate - winch instantiate");
         let winch_instance = host.map_wasmtime_error(
             winch_linker.instantiate(&mut winch_store, &parsed_module.winch_module),
         )?;
+        std::mem::drop(_winch_instantiate);
         let winch_memory = if let Some(ext) = winch_instance.get_export(&mut winch_store, "memory")
         {
             ext.into_memory()
         } else {
             None
         };
+        std::mem::drop(_winch_part);
 
         // Here we do _not_ supply the store with any fuel. Fuel is supplied
         // right before the VM is being run, i.e., before crossing the host->VM
@@ -566,6 +580,8 @@ impl Vm {
         inputs: &[wasmtime::Val],
         treat_missing_function_as_noop: bool,
     ) -> Result<Val, HostError> {
+        let _span = tracy_span!("Vm::metered_winch_func_call");
+
         host.charge_budget(ContractCostType::InvokeVmFunction, None)?;
 
         // resolve the function entity to be called
@@ -617,11 +633,14 @@ impl Vm {
             .add_fuel_to_vm(host)?;
         host.set_last_vm_fuel(added_fuel)?;
 
-        let res = func.call(
+        let res = {
+            let _span = tracy_span!("Vm::metered_winch_func_call - actual call");
+            func.call(
             &mut *self.winch_store.try_borrow_mut_or_err()?,
             inputs,
             &mut wasm_ret,
-        );
+        )
+    };
 
         let last_fuel = host.get_last_vm_fuel()?;
         self.winch_store
