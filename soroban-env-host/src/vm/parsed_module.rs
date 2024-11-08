@@ -203,8 +203,9 @@ impl ParsedModule {
             {
                 serialize_span.emit_value(winch_bytes.len() as u64);
             }
+            const MAX_COMPRESSION_LEVEL: i32 = 22;
             let mut compressed_bytes = Vec::new();
-            host.map_io_error(copy_encode(&winch_bytes[..], &mut compressed_bytes, 0))?;
+            host.map_io_error(copy_encode(&winch_bytes[..], &mut compressed_bytes, MAX_COMPRESSION_LEVEL))?;
             let _3 = tracy_span!("std::fs::write");
             host.map_io_error(std::fs::write(&path, &compressed_bytes))?;
             let wasm_path = path.with_extension("wasm");
