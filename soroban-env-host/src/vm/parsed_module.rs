@@ -183,11 +183,11 @@ impl ParsedModule {
             let compressed_bytes = host.map_io_error(std::fs::read(&path))?;
             let mut decompressed_bytes = Vec::new();
             #[cfg(feature = "tracy")]
-            std::mem::forget(_read_span);
+            std::mem::drop(_read_span);
             let _decompress_span = tracy_span!("decompress winch.zst");
             host.map_io_error(copy_decode(&compressed_bytes[..], &mut decompressed_bytes))?;
             #[cfg(feature = "tracy")]
-            std::mem::forget(_decompress_span);
+            std::mem::drop(_decompress_span);
             let _deserialize_span = tracy_span!("wasmtime::Module::deserialize");
             let module = host.map_wasmtime_error(unsafe {
                 wasmtime::Module::deserialize(&engine, &decompressed_bytes)
@@ -205,7 +205,7 @@ impl ParsedModule {
             #[cfg(feature = "tracy")]
             {
                 _serialize_span.emit_value(winch_bytes.len() as u64);
-                std::mem::forget(_serialize_span);
+                std::mem::drop(_serialize_span);
             }
 
             const MAX_COMPRESSION_LEVEL: i32 = 22;
@@ -213,11 +213,11 @@ impl ParsedModule {
             let _compress_span = tracy_span!("compress winch.zst");
             host.map_io_error(copy_encode(&winch_bytes[..], &mut compressed_bytes, MAX_COMPRESSION_LEVEL))?;
             #[cfg(feature = "tracy")]
-            std::mem::forget(_compress_span);
+            std::mem::drop(_compress_span);
             let _write_span = tracy_span!("std::fs::write winch.zst");
             host.map_io_error(std::fs::write(&path, &compressed_bytes))?;
             #[cfg(feature = "tracy")]
-            std::mem::forget(_write_span);
+            std::mem::drop(_write_span);
             let wasm_path = path.with_extension("wasm");
             let _write_span = tracy_span!("std::fs::write wasm");
             host.map_io_error(std::fs::write(&wasm_path, wasm_bytes))?;
