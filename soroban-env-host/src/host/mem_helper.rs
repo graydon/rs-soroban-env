@@ -129,6 +129,7 @@ impl Host {
         }
     }
 
+    #[allow(clippy::needless_lifetimes)]
     fn get_data_mut<'host, 'caller, 'vm>(
         &'host self,
         vmcaller: &'caller mut VmCaller<Host>,
@@ -151,6 +152,7 @@ impl Host {
         }
     }
 
+    #[allow(clippy::needless_lifetimes)]
     fn get_data<'host, 'caller, 'vm>(
         &'host self,
         vmcaller: &'caller VmCaller<Host>,

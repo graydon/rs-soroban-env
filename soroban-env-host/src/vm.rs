@@ -658,7 +658,7 @@ impl Vm {
             return host.map_wasmtime_error(Err(e));
         }
         host.relative_to_absolute(
-            Val::try_marshal_from_wasmtime_value(wasm_ret[0].clone()).ok_or(ConversionError)?,
+            Val::try_marshal_from_wasmtime_value(wasm_ret[0]).ok_or(ConversionError)?,
         )
     }
 

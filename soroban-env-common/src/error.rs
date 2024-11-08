@@ -285,6 +285,7 @@ impl From<wasmparser::BinaryReaderError> for Error {
 
 #[cfg(feature = "wasmtime")]
 impl From<wasmtime::Trap> for Error {
+    #[allow(clippy::wildcard_in_or_patterns)]
     fn from(trap: wasmtime::Trap) -> Self {
         let ec = match trap {
             wasmtime::Trap::UnreachableCodeReached => ScErrorCode::InvalidAction,
