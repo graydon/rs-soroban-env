@@ -12,6 +12,7 @@ use wasmi::{Engine, Module};
 
 use super::Vm;
 use std::{collections::BTreeSet, io::Cursor, rc::Rc};
+use zstd::stream::{copy_encode, copy_decode};
 
 #[derive(Debug, Clone)]
 pub enum VersionedContractCodeCostInputs {
@@ -175,14 +176,16 @@ impl ParsedModule {
         let mod_hash: [u8; 32] = <Sha256 as sha2::Digest>::digest(wasm_bytes).into();
         let mod_hex = hex::encode(mod_hash);
         path.push(mod_hex);
-        path.set_extension("winch");
+        path.set_extension("winch.zst");
         if path.exists() {
             let _2 = tracy_span!("std::fs::read");
-            let winch_bytes = host.map_io_error(std::fs::read(&path))?;
+            let compressed_bytes = host.map_io_error(std::fs::read(&path))?;
+            let mut decompressed_bytes = Vec::new();
+            host.map_io_error(copy_decode(&compressed_bytes[..], &mut decompressed_bytes))?;
             #[cfg(feature = "tracy")]
             let deserialize_span = tracy_span!("wasmtime::Module::deserialize");
             let module = host.map_wasmtime_error(unsafe {
-                wasmtime::Module::deserialize(&engine, &winch_bytes)
+                wasmtime::Module::deserialize(&engine, &decompressed_bytes)
             })?;
 
             #[cfg(feature = "tracy")]
@@ -200,8 +203,10 @@ impl ParsedModule {
             {
                 serialize_span.emit_value(winch_bytes.len() as u64);
             }
+            let mut compressed_bytes = Vec::new();
+            host.map_io_error(copy_encode(&winch_bytes[..], &mut compressed_bytes, 0))?;
             let _3 = tracy_span!("std::fs::write");
-            host.map_io_error(std::fs::write(&path, &winch_bytes))?;
+            host.map_io_error(std::fs::write(&path, &compressed_bytes))?;
             let wasm_path = path.with_extension("wasm");
             host.map_io_error(std::fs::write(&wasm_path, wasm_bytes))?;
             Ok(module)
