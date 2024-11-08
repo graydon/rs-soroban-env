@@ -168,6 +168,7 @@ impl ParsedModule {
         wasm_bytes: &[u8],
         engine: &wasmtime::Engine,
     ) -> Result<wasmtime::Module, HostError> {
+        let _span = tracy_span!("get-or-make winch module");
         let mut path = std::env::temp_dir();
         path.push("soroban-contracts");
         if !path.exists() {
@@ -178,37 +179,47 @@ impl ParsedModule {
         path.push(mod_hex);
         path.set_extension("winch.zst");
         if path.exists() {
-            let _2 = tracy_span!("std::fs::read");
+            let _read_span = tracy_span!("std::fs::read winch.zst");
             let compressed_bytes = host.map_io_error(std::fs::read(&path))?;
             let mut decompressed_bytes = Vec::new();
+            #[cfg(feature = "tracy")]
+            std::mem::forget(_read_span);
+            let _decompress_span = tracy_span!("decompress winch.zst");
             host.map_io_error(copy_decode(&compressed_bytes[..], &mut decompressed_bytes))?;
             #[cfg(feature = "tracy")]
-            let deserialize_span = tracy_span!("wasmtime::Module::deserialize");
+            std::mem::forget(_decompress_span);
+            let _deserialize_span = tracy_span!("wasmtime::Module::deserialize");
             let module = host.map_wasmtime_error(unsafe {
                 wasmtime::Module::deserialize(&engine, &decompressed_bytes)
             })?;
 
             #[cfg(feature = "tracy")]
             {
-                deserialize_span.emit_value(module.text().len() as u64);
+                _deserialize_span.emit_value(module.text().len() as u64);
             }
             Ok(module)
         } else {
-            let _2 = tracy_span!("wasmtime::Module::new");
             let module = host.map_wasmtime_error(wasmtime::Module::new(&engine, &wasm_bytes))?;
-            #[cfg(feature = "tracy")]
-            let serialize_span = tracy_span!("wasmtime::Module::serialize");
+            let _serialize_span = tracy_span!("wasmtime::Module::serialize");
             let winch_bytes = host.map_wasmtime_error(module.serialize())?;
             #[cfg(feature = "tracy")]
             {
-                serialize_span.emit_value(winch_bytes.len() as u64);
+                _serialize_span.emit_value(winch_bytes.len() as u64);
+                std::mem::forget(_serialize_span);
             }
+
             const MAX_COMPRESSION_LEVEL: i32 = 22;
             let mut compressed_bytes = Vec::new();
+            let _compress_span = tracy_span!("compress winch.zst");
             host.map_io_error(copy_encode(&winch_bytes[..], &mut compressed_bytes, MAX_COMPRESSION_LEVEL))?;
-            let _3 = tracy_span!("std::fs::write");
+            #[cfg(feature = "tracy")]
+            std::mem::forget(_compress_span);
+            let _write_span = tracy_span!("std::fs::write winch.zst");
             host.map_io_error(std::fs::write(&path, &compressed_bytes))?;
+            #[cfg(feature = "tracy")]
+            std::mem::forget(_write_span);
             let wasm_path = path.with_extension("wasm");
+            let _write_span = tracy_span!("std::fs::write wasm");
             host.map_io_error(std::fs::write(&wasm_path, wasm_bytes))?;
             Ok(module)
         }
@@ -283,7 +294,7 @@ impl ParsedModule {
         wasm: &[u8],
     ) -> Result<(Module, wasmtime::Module, u32), HostError> {
         let module = {
-            let _span0 = tracy_span!("parse module");
+            let _span0 = tracy_span!("parse_wasm (wasmi)");
             host.map_err(Module::new(&engine, wasm))?
         };
         let winch_module =
