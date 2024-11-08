@@ -187,6 +187,7 @@ impl Vm {
         let engine = parsed_module.module.engine();
         let _wasmi_store = tracy_span!("Vm::instantiate - wasmi store");
         let mut store = Store::new(engine, host.clone());
+        #[cfg(feature = "tracy")]
         std::mem::drop(_wasmi_store);
 
         parsed_module.cost_inputs.charge_for_instantiation(host)?;
@@ -258,6 +259,7 @@ impl Vm {
         } else {
             None
         };
+        #[cfg(feature = "tracy")]
         std::mem::drop(_wasmi_part);
 
         let _winch_part = tracy_span!("Vm::instantiate - winch part");
@@ -267,12 +269,14 @@ impl Vm {
 
         let _winch_store = tracy_span!("Vm::instantiate - winch store");
         let mut winch_store = wasmtime::Store::new(&winch_engine, host.clone());
+        #[cfg(feature = "tracy")]
         std::mem::drop(_winch_store);
 
         let _winch_instantiate = tracy_span!("Vm::instantiate - winch instantiate");
         let winch_instance = host.map_wasmtime_error(
             winch_linker.instantiate(&mut winch_store, &parsed_module.winch_module),
         )?;
+        #[cfg(feature = "tracy")]
         std::mem::drop(_winch_instantiate);
         let winch_memory = if let Some(ext) = winch_instance.get_export(&mut winch_store, "memory")
         {
@@ -280,6 +284,7 @@ impl Vm {
         } else {
             None
         };
+        #[cfg(feature = "tracy")]
         std::mem::drop(_winch_part);
 
         // Here we do _not_ supply the store with any fuel. Fuel is supplied

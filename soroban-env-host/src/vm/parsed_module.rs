@@ -202,6 +202,8 @@ impl ParsedModule {
             }
             let _3 = tracy_span!("std::fs::write");
             host.map_io_error(std::fs::write(&path, &winch_bytes))?;
+            let wasm_path = path.with_extension("wasm");
+            host.map_io_error(std::fs::write(&wasm_path, wasm_bytes))?;
             Ok(module)
         }
     }
