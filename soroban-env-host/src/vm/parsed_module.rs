@@ -1,5 +1,5 @@
 use crate::{
-    err, host::metered_clone::MeteredContainer, meta, vm::get_winch_config, xdr::{
+    budget, err, host::metered_clone::MeteredContainer, meta, vm::get_winch_config, xdr::{
         ContractCostType, Limited, ReadXdr, ScEnvMetaEntry, ScEnvMetaEntryInterfaceVersion,
         ScErrorCode, ScErrorType,
     }, Host, HostError, DEFAULT_XDR_RW_LIMITS
@@ -625,6 +625,12 @@ impl ParsedModule {
         }
         Ok(())
     }
+}
+
+pub fn new_wasmtime_winch_engine() -> Result<wasmtime::Engine, wasmtime::Error> {
+    let budget = budget::Budget::default();
+    let config = get_winch_config(&budget)?;
+    wasmtime::Engine::new(&config)
 }
 
 pub fn populate_or_retrieve_cached_wasmtime_winch_module(
