@@ -670,10 +670,11 @@ pub fn populate_or_retrieve_cached_wasmtime_winch_module(
             module.serialize()?
         };
         let compressed_bytes = {
-            const MAX_COMPRESSION_LEVEL: i32 = 22;
+            // 0 means "default" which is usually "level 3"
+            const COMPRESSION_LEVEL: i32 = 0;
             let mut compressed_bytes = Vec::new();
             let _compress_span = tracy_span!("compress winch.zst");
-            copy_encode(&winch_bytes[..], &mut compressed_bytes, MAX_COMPRESSION_LEVEL)?;
+            copy_encode(&winch_bytes[..], &mut compressed_bytes, COMPRESSION_LEVEL)?;
             compressed_bytes
         };
         {
