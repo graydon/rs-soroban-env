@@ -397,18 +397,6 @@ impl Host {
         }
     }
 
-    // FIXME: remove this, it's just temporary while caching winch contracts in the filesystem
-    pub(crate) fn map_io_error<T>(&self, iores: Result<T, std::io::Error>) -> Result<T, HostError> {
-        iores.map_err(|e| {
-            self.err(
-                ScErrorType::Context,
-                ScErrorCode::InternalError,
-                &format!("io error: {}", e),
-                &[],
-            )
-        })
-    }
-
     // Extracts the account id from the given ledger key as address object `Val`.
     // Returns Void for unsupported entries.
     // Useful as a helper for error reporting.

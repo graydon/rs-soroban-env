@@ -34,6 +34,7 @@ pub(crate) mod host_object;
 pub mod auth;
 pub mod vm;
 pub use vm::Vm;
+pub use vm::populate_or_retrieve_cached_wasmtime_winch_module;
 pub mod storage;
 pub use budget::{DEFAULT_HOST_DEPTH_LIMIT, DEFAULT_XDR_RW_LIMITS};
 pub use host::{

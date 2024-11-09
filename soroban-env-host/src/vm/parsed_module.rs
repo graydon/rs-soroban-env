@@ -163,68 +163,6 @@ impl ParsedModule {
         }))
     }
 
-    pub fn populate_or_retreve_cached_wasmtime_winch_module(
-        host: &Host,
-        wasm_bytes: &[u8],
-        engine: &wasmtime::Engine,
-    ) -> Result<wasmtime::Module, HostError> {
-        let _span = tracy_span!("get-or-make winch module");
-        let mut path = std::env::temp_dir();
-        path.push("soroban-contracts");
-        if !path.exists() {
-            std::fs::create_dir_all(&path).unwrap();
-        }
-        let mod_hash: [u8; 32] = <Sha256 as sha2::Digest>::digest(wasm_bytes).into();
-        let mod_hex = hex::encode(mod_hash);
-        path.push(mod_hex);
-        path.set_extension("winch.zst");
-        if path.exists() {
-            let _read_span = tracy_span!("std::fs::read winch.zst");
-            let compressed_bytes = host.map_io_error(std::fs::read(&path))?;
-            let mut decompressed_bytes = Vec::new();
-            #[cfg(feature = "tracy")]
-            std::mem::drop(_read_span);
-            let _decompress_span = tracy_span!("decompress winch.zst");
-            host.map_io_error(copy_decode(&compressed_bytes[..], &mut decompressed_bytes))?;
-            #[cfg(feature = "tracy")]
-            std::mem::drop(_decompress_span);
-            let _deserialize_span = tracy_span!("wasmtime::Module::deserialize");
-            let module = host.map_wasmtime_error(unsafe {
-                wasmtime::Module::deserialize(&engine, &decompressed_bytes)
-            })?;
-
-            #[cfg(feature = "tracy")]
-            {
-                _deserialize_span.emit_value(module.text().len() as u64);
-            }
-            Ok(module)
-        } else {
-            let module = host.map_wasmtime_error(wasmtime::Module::new(&engine, &wasm_bytes))?;
-            let _serialize_span = tracy_span!("wasmtime::Module::serialize");
-            let winch_bytes = host.map_wasmtime_error(module.serialize())?;
-            #[cfg(feature = "tracy")]
-            {
-                _serialize_span.emit_value(winch_bytes.len() as u64);
-                std::mem::drop(_serialize_span);
-            }
-
-            const MAX_COMPRESSION_LEVEL: i32 = 22;
-            let mut compressed_bytes = Vec::new();
-            let _compress_span = tracy_span!("compress winch.zst");
-            host.map_io_error(copy_encode(&winch_bytes[..], &mut compressed_bytes, MAX_COMPRESSION_LEVEL))?;
-            #[cfg(feature = "tracy")]
-            std::mem::drop(_compress_span);
-            let _write_span = tracy_span!("std::fs::write winch.zst");
-            host.map_io_error(std::fs::write(&path, &compressed_bytes))?;
-            #[cfg(feature = "tracy")]
-            std::mem::drop(_write_span);
-            let wasm_path = path.with_extension("wasm");
-            let _write_span = tracy_span!("std::fs::write wasm");
-            host.map_io_error(std::fs::write(&wasm_path, wasm_bytes))?;
-            Ok(module)
-        }
-    }
-
     pub fn with_import_symbols<T>(
         &self,
         host: &Host,
@@ -298,7 +236,7 @@ impl ParsedModule {
             host.map_err(Module::new(&engine, wasm))?
         };
         let winch_module =
-            Self::populate_or_retreve_cached_wasmtime_winch_module(host, wasm, winch_engine)?;
+            host.map_wasmtime_error(populate_or_retrieve_cached_wasmtime_winch_module(wasm, winch_engine))?;
 
         Self::check_max_args(host, &module)?;
         let interface_version = Self::check_meta_section(host, &module)?;
@@ -686,5 +624,61 @@ impl ParsedModule {
             }
         }
         Ok(())
+    }
+}
+
+pub fn populate_or_retrieve_cached_wasmtime_winch_module(
+    wasm_bytes: &[u8],
+    engine: &wasmtime::Engine,
+) -> Result<wasmtime::Module, wasmtime::Error> {
+    let _span = tracy_span!("get-or-make winch module");
+    let mut path = std::env::temp_dir();
+    path.push("soroban-contracts");
+    if !path.exists() {
+        std::fs::create_dir_all(&path)?;
+    }
+    let mod_hash: [u8; 32] = <Sha256 as sha2::Digest>::digest(wasm_bytes).into();
+    let mod_hex = hex::encode(mod_hash);
+    path.push(mod_hex);
+    path.set_extension("winch.zst");
+    if path.exists() {
+        let compressed_bytes = {
+            let _read_span = tracy_span!("std::fs::read winch.zst");
+            std::fs::read(&path)?
+        };
+        let decompressed_bytes = {
+            let mut decompressed_bytes = Vec::new();
+            let _decompress_span = tracy_span!("decompress winch.zst");
+            copy_decode(&compressed_bytes[..], &mut decompressed_bytes)?;
+            decompressed_bytes
+        };
+        let module = {
+            let _deserialize_span = tracy_span!("wasmtime::Module::deserialize");
+            unsafe { wasmtime::Module::deserialize(&engine, &decompressed_bytes) }?
+        };
+        Ok(module)
+    } else {
+        let module = wasmtime::Module::new(&engine, &wasm_bytes)?;
+        let winch_bytes = {
+            let _serialize_span = tracy_span!("wasmtime::Module::serialize");
+            module.serialize()?
+        };
+        let compressed_bytes = {
+            const MAX_COMPRESSION_LEVEL: i32 = 22;
+            let mut compressed_bytes = Vec::new();
+            let _compress_span = tracy_span!("compress winch.zst");
+            copy_encode(&winch_bytes[..], &mut compressed_bytes, MAX_COMPRESSION_LEVEL)?;
+            compressed_bytes
+        };
+        {
+            let _write_span = tracy_span!("std::fs::write winch.zst");
+            std::fs::write(&path, &compressed_bytes)?;
+        }
+        {
+            let wasm_path = path.with_extension("wasm");
+            let _write_span = tracy_span!("std::fs::write wasm");
+            std::fs::write(&wasm_path, wasm_bytes)?;
+        }
+        Ok(module)
     }
 }
