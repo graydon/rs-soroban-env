@@ -38,6 +38,7 @@ use func_info::HOST_FUNCTIONS;
 pub use module_cache::ModuleCache;
 pub use parsed_module::{ParsedModule, VersionedContractCodeCostInputs};
 pub use parsed_module::{new_wasmtime_winch_engine, populate_or_retrieve_cached_wasmtime_winch_module};
+pub use wasmtime::Engine as WasmtimeEngine;
 
 use wasmi::{Instance, Linker, Memory, Store, Value};
 
