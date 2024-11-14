@@ -142,6 +142,8 @@ pub(crate) fn get_winch_config(_budget: &Budget) -> Result<wasmtime::Config, Hos
     let mut config = wasmtime::Config::new();
     config
         .strategy(wasmtime::Strategy::Winch)
+        .debug_info(false)
+        .generate_address_map(false)
         .consume_fuel(true)
         .wasm_bulk_memory(true)
         .wasm_multi_value(false)

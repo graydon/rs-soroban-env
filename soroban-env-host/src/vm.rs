@@ -119,6 +119,14 @@ impl Host {
         Ok(linker)
     }
 
+    pub(crate) fn make_maximal_linker(engine: &wasmi::Engine) -> Result<Linker<Host>, HostError> {
+        let mut linker = Linker::new(&engine);
+        for hf in HOST_FUNCTIONS {
+            (hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le))?;
+        }
+        Ok(linker)
+    }
+
     pub(crate) fn make_winch_linker(
         host: &Host,
         engine: &wasmtime::Engine,
@@ -129,6 +137,17 @@ impl Host {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
                 host.map_wasmtime_error((hf.wrap_winch)(&mut linker))?;
             }
+        }
+        Ok(linker)
+    }
+
+    pub(crate) fn make_maximal_winch_linker(
+        host: &Host,
+        engine: &wasmtime::Engine,
+    ) -> Result<wasmtime::Linker<Host>, HostError> {
+        let mut linker = wasmtime::Linker::new(engine);
+        for hf in HOST_FUNCTIONS {
+            host.map_wasmtime_error((hf.wrap_winch)(&mut linker))?;
         }
         Ok(linker)
     }
@@ -311,11 +330,8 @@ impl Vm {
     ) -> Result<Rc<Self>, HostError> {
         let _span = tracy_span!("Vm::from_parsed_module");
         VmInstantiationTimer::new(host.clone());
-        if let (Some(linker), Some(winch_linker)) = (
-            &*host.try_borrow_linker()?,
-            &*host.try_borrow_winch_linker()?,
-        ) {
-            Self::instantiate(host, contract_id, parsed_module, linker, winch_linker)
+        if let Some(cache) = &*host.try_borrow_module_cache()? {
+            Self::instantiate(host, contract_id, parsed_module, &cache.linker, &cache.winch_linker)
         } else {
             let linker = parsed_module.make_linker(host)?;
             let winch_linker = parsed_module.make_winch_linker(host)?;
