@@ -1,5 +1,7 @@
 use super::{
-    func_info::HOST_FUNCTIONS, get_winch_config, parsed_module::{ParsedModule, VersionedContractCodeCostInputs}
+    func_info::HOST_FUNCTIONS,
+    get_winch_config,
+    parsed_module::{ParsedModule, VersionedContractCodeCostInputs},
 };
 use crate::{
     budget::{get_wasmi_config, AsBudget, Budget},
@@ -52,7 +54,7 @@ impl ModuleCache {
             modules,
             linker,
             winch_linker,
-            reusable: false
+            reusable: false,
         };
         cache.add_stored_contracts(host)?;
         Ok(cache)
@@ -104,8 +106,12 @@ impl ModuleCache {
                         &[],
                     ));
                 };
-                let mut to_trim  = self.modules.len() - sz;
-                let mut to_keep = self.modules.iter(host.as_budget())?.map(|x| Some(x)).collect::<Vec<_>>();
+                let mut to_trim = self.modules.len() - sz;
+                let mut to_keep = self
+                    .modules
+                    .iter(host.as_budget())?
+                    .map(|x| Some(x))
+                    .collect::<Vec<_>>();
                 while to_trim != 0 {
                     let range = 0..=(self.modules.len() as u64 - 1);
                     let n = prng.u64_in_inclusive_range(range, host.as_budget())?;
@@ -177,6 +183,25 @@ impl ModuleCache {
         Ok(())
     }
 
+    pub fn parse_and_cache_module_simple(
+        &mut self,
+        host: &Host,
+        wasm: &[u8],
+    ) -> Result<(), HostError> {
+        let contract_id = Hash(crate::crypto::sha256_hash_from_bytes_raw(
+            wasm,
+            host.as_budget(),
+        )?);
+        self.parse_and_cache_module(
+            host,
+            &contract_id,
+            wasm,
+            VersionedContractCodeCostInputs::V0 {
+                wasm_bytes: wasm.len(),
+            },
+        )
+    }
+
     pub fn parse_and_cache_module(
         &mut self,
         host: &Host,
@@ -198,9 +223,11 @@ impl ModuleCache {
         }
         let parsed_module =
             ParsedModule::new(host, &self.engine, &self.winch_engine, &wasm, cost_inputs)?;
-        self.modules =
-            self.modules
-                .insert(contract_id.metered_clone(host)?, parsed_module, host.as_budget())?;
+        self.modules = self.modules.insert(
+            contract_id.metered_clone(host)?,
+            parsed_module,
+            host.as_budget(),
+        )?;
         Ok(())
     }
 

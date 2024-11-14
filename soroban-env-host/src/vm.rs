@@ -37,8 +37,6 @@ use func_info::HOST_FUNCTIONS;
 
 pub use module_cache::ModuleCache;
 pub use parsed_module::{ParsedModule, VersionedContractCodeCostInputs};
-pub use parsed_module::{new_wasmtime_winch_engine, populate_or_retrieve_cached_wasmtime_winch_module};
-pub use wasmtime::Engine as WasmtimeEngine;
 
 use wasmi::{Instance, Linker, Memory, Store, Value};
 
@@ -331,7 +329,13 @@ impl Vm {
         let _span = tracy_span!("Vm::from_parsed_module");
         VmInstantiationTimer::new(host.clone());
         if let Some(cache) = &*host.try_borrow_module_cache()? {
-            Self::instantiate(host, contract_id, parsed_module, &cache.linker, &cache.winch_linker)
+            Self::instantiate(
+                host,
+                contract_id,
+                parsed_module,
+                &cache.linker,
+                &cache.winch_linker,
+            )
         } else {
             let linker = parsed_module.make_linker(host)?;
             let winch_linker = parsed_module.make_winch_linker(host)?;
@@ -659,11 +663,11 @@ impl Vm {
         let res = {
             let _span = tracy_span!("Vm::metered_winch_func_call - actual call");
             func.call(
-            &mut *self.winch_store.try_borrow_mut_or_err()?,
-            inputs,
-            &mut wasm_ret,
-        )
-    };
+                &mut *self.winch_store.try_borrow_mut_or_err()?,
+                inputs,
+                &mut wasm_ret,
+            )
+        };
 
         let last_fuel = host.get_last_vm_fuel()?;
         self.winch_store

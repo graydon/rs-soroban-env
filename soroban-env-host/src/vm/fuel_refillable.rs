@@ -108,7 +108,9 @@ macro_rules! impl_refillable_for_winch_store {
 
             fn add_fuel(&mut self, fuel: u64) -> Result<(), HostError> {
                 let existing_fuel = self.fuel_total()?;
-                let new_fuel = existing_fuel.saturating_add(fuel).saturating_mul(WINCH_FUEL_FACTOR);
+                let new_fuel = existing_fuel
+                    .saturating_add(fuel)
+                    .saturating_mul(WINCH_FUEL_FACTOR);
                 self.set_fuel(new_fuel)
                     .map_err(|_| HostError::from(VM_INTERNAL_ERROR))
             }

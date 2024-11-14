@@ -1,8 +1,13 @@
 use crate::{
-    budget, err, host::metered_clone::MeteredContainer, meta, vm::get_winch_config, xdr::{
+    err,
+    host::metered_clone::MeteredContainer,
+    meta,
+    vm::get_winch_config,
+    xdr::{
         ContractCostType, Limited, ReadXdr, ScEnvMetaEntry, ScEnvMetaEntryInterfaceVersion,
         ScErrorCode, ScErrorType,
-    }, Host, HostError, DEFAULT_XDR_RW_LIMITS
+    },
+    Host, HostError, DEFAULT_XDR_RW_LIMITS,
 };
 
 use sha2::Sha256;
@@ -12,7 +17,7 @@ use wasmi::{Engine, Module};
 
 use super::Vm;
 use std::{collections::BTreeSet, io::Cursor, rc::Rc};
-use zstd::stream::{copy_encode, copy_decode};
+use zstd::stream::{copy_decode, copy_encode};
 
 #[derive(Debug, Clone)]
 pub enum VersionedContractCodeCostInputs {
@@ -235,8 +240,9 @@ impl ParsedModule {
             let _span0 = tracy_span!("parse_wasm (wasmi)");
             host.map_err(Module::new(&engine, wasm))?
         };
-        let winch_module =
-            host.map_wasmtime_error(populate_or_retrieve_cached_wasmtime_winch_module(wasm, winch_engine))?;
+        let winch_module = host.map_wasmtime_error(
+            populate_or_retrieve_cached_wasmtime_winch_module(wasm, winch_engine),
+        )?;
 
         Self::check_max_args(host, &module)?;
         let interface_version = Self::check_meta_section(host, &module)?;
@@ -627,13 +633,7 @@ impl ParsedModule {
     }
 }
 
-pub fn new_wasmtime_winch_engine() -> Result<wasmtime::Engine, wasmtime::Error> {
-    let budget = budget::Budget::default();
-    let config = get_winch_config(&budget)?;
-    wasmtime::Engine::new(&config)
-}
-
-pub fn populate_or_retrieve_cached_wasmtime_winch_module(
+fn populate_or_retrieve_cached_wasmtime_winch_module(
     wasm_bytes: &[u8],
     engine: &wasmtime::Engine,
 ) -> Result<wasmtime::Module, wasmtime::Error> {
