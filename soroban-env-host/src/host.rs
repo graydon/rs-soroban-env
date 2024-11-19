@@ -396,7 +396,8 @@ impl Host {
     // Install a module cache from _outside_ the Host. Doing this is potentially
     // delicate: the cache must contain all contracts that will be run by the
     // host, and will not be further populated during execution.
-    pub fn set_module_cache(&self, cache: ModuleCache) -> Result<(), HostError> {
+    pub fn set_module_cache(&self, mut cache: ModuleCache) -> Result<(), HostError> {
+        cache.add_stored_contracts(self)?;
         *self.try_borrow_module_cache_mut()? = Some(cache);
         Ok(())
     }
