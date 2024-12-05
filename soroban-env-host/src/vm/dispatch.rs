@@ -293,7 +293,7 @@ macro_rules! generate_dispatch_functions {
 // Here we invoke the x-macro passing generate_dispatch_functions as its callback macro.
 call_macro_with_all_host_functions! { generate_dispatch_functions }
 
-pub(crate) mod winch {
+pub(crate) mod wasmtime_dispatch {
     use super::*;
 
     ///////////////////////////////////////////////////////////////////////////////
@@ -303,7 +303,7 @@ pub(crate) mod winch {
     // This is a callback macro that pattern-matches the token-tree passed by the
     // x-macro (call_macro_with_all_host_functions) and produces a suite of
     // dispatch-function definitions.
-    macro_rules! generate_winch_dispatch_functions {
+    macro_rules! generate_wasmtime_dispatch_functions {
     {
         $(
             // This outer pattern matches a single 'mod' block of the token-tree
@@ -452,7 +452,7 @@ pub(crate) mod winch {
 
                     // This is where the Host->VM boundary is crossed.
                     // We supply the remaining host budget as fuel to the VM.
-                    let caller = vmcaller.try_mut_winch().map_err(|e| Trap::from(HostError::from(e)))?;
+                    let caller = vmcaller.try_mut_wasmtime().map_err(|e| Trap::from(HostError::from(e)))?;
                     let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| Trap::from(he))?;
                     host.set_last_vm_fuel(added_fuel)?;
 
@@ -463,5 +463,5 @@ pub(crate) mod winch {
     };
 }
 
-    call_macro_with_all_host_functions! { generate_winch_dispatch_functions }
+    call_macro_with_all_host_functions! { generate_wasmtime_dispatch_functions }
 }

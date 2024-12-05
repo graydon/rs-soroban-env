@@ -23,7 +23,7 @@ pub(crate) struct HostFuncInfo {
     /// Function that takes a wasmtime::Linker and adds a dispatch function
     /// for this host function, with the specific type of the dispatch function,
     /// into a Func in the Linker.
-    pub(crate) wrap_winch:
+    pub(crate) wrap_wasmtime:
         fn(&mut wasmtime::Linker<Host>) -> Result<&mut wasmtime::Linker<Host>, wasmtime::Error>,
 
     /// Minimal supported protocol version of this host function
@@ -52,7 +52,7 @@ macro_rules! host_function_info_helper {
             fn_str: $fn_id,
             arity: fn_arity!($args),
             wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
-            wrap_winch: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::winch::$func_id),
+            wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: Some($min_proto),
             max_proto: Some($max_proto),
         }
@@ -63,7 +63,7 @@ macro_rules! host_function_info_helper {
             fn_str: $fn_id,
             arity: fn_arity!($args),
             wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
-            wrap_winch: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::winch::$func_id),
+            wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: Some($min_proto),
             max_proto: None,
         }
@@ -74,7 +74,7 @@ macro_rules! host_function_info_helper {
             fn_str: $fn_id,
             arity: fn_arity!($args),
             wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
-            wrap_winch: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::winch::$func_id),
+            wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: None,
             max_proto: Some($max_proto),
         }
@@ -85,7 +85,7 @@ macro_rules! host_function_info_helper {
             fn_str: $fn_id,
             arity: fn_arity!($args),
             wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
-            wrap_winch: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::winch::$func_id),
+            wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: None,
             max_proto: None,
         }

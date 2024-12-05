@@ -21,7 +21,7 @@ pub(crate) use dispatch::protocol_gated_dummy;
 use soroban_env_common::WasmtimeMarshal;
 
 use crate::{
-    budget::{get_wasmi_config, get_winch_config, AsBudget, Budget},
+    budget::{get_wasmi_config, get_wasmtime_config, AsBudget, Budget},
     host::{
         error::TryBorrowOrErr,
         metered_clone::MeteredContainer,
@@ -92,9 +92,9 @@ pub struct Vm {
     instance: Instance,
     pub(crate) memory: Option<Memory>,
 
-    winch_store: RefCell<wasmtime::Store<Host>>,
-    winch_instance: wasmtime::Instance,
-    pub(crate) winch_memory: Option<wasmtime::Memory>,
+    wasmtime_store: RefCell<wasmtime::Store<Host>>,
+    wasmtime_instance: wasmtime::Instance,
+    pub(crate) wasmtime_memory: Option<wasmtime::Memory>,
 }
 
 impl std::hash::Hash for Vm {
@@ -125,7 +125,7 @@ impl Host {
         Ok(linker)
     }
 
-    pub(crate) fn make_winch_linker(
+    pub(crate) fn make_wasmtime_linker(
         host: &Host,
         engine: &wasmtime::Engine,
         symbols: &BTreeSet<(&str, &str)>,
@@ -133,19 +133,19 @@ impl Host {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
-                host.map_wasmtime_error((hf.wrap_winch)(&mut linker))?;
+                host.map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
             }
         }
         Ok(linker)
     }
 
-    pub(crate) fn make_maximal_winch_linker(
+    pub(crate) fn make_maximal_wasmtime_linker(
         host: &Host,
         engine: &wasmtime::Engine,
     ) -> Result<wasmtime::Linker<Host>, HostError> {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
-            host.map_wasmtime_error((hf.wrap_winch)(&mut linker))?;
+            host.map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
         }
         Ok(linker)
     }
@@ -191,7 +191,7 @@ impl Vm {
         contract_id: Hash,
         parsed_module: Rc<ParsedModule>,
         linker: &Linker<Host>,
-        winch_linker: &wasmtime::Linker<Host>,
+        wasmtime_linker: &wasmtime::Linker<Host>,
     ) -> Result<Rc<Self>, HostError> {
         let _span = tracy_span!("Vm::instantiate");
 
@@ -281,30 +281,30 @@ impl Vm {
         #[cfg(feature = "tracy")]
         std::mem::drop(_wasmi_part);
 
-        let _winch_part = tracy_span!("Vm::instantiate - winch part");
+        let _wasmtime_part = tracy_span!("Vm::instantiate - wasmtime part");
 
-        // Redo instantiation steps above for winch.
-        let winch_engine = parsed_module.winch_module.engine();
+        // Redo instantiation steps above for wasmtime.
+        let wasmtime_engine = parsed_module.wasmtime_module.engine();
 
-        let _winch_store = tracy_span!("Vm::instantiate - winch store");
-        let mut winch_store = wasmtime::Store::new(&winch_engine, host.clone());
+        let _wasmtime_store = tracy_span!("Vm::instantiate - wasmtime store");
+        let mut wasmtime_store = wasmtime::Store::new(&wasmtime_engine, host.clone());
         #[cfg(feature = "tracy")]
-        std::mem::drop(_winch_store);
+        std::mem::drop(_wasmtime_store);
 
-        let _winch_instantiate = tracy_span!("Vm::instantiate - winch instantiate");
-        let winch_instance = host.map_wasmtime_error(
-            winch_linker.instantiate(&mut winch_store, &parsed_module.winch_module),
+        let _wasmtime_instantiate = tracy_span!("Vm::instantiate - wasmtime instantiate");
+        let wasmtime_instance = host.map_wasmtime_error(
+            wasmtime_linker.instantiate(&mut wasmtime_store, &parsed_module.wasmtime_module),
         )?;
         #[cfg(feature = "tracy")]
-        std::mem::drop(_winch_instantiate);
-        let winch_memory = if let Some(ext) = winch_instance.get_export(&mut winch_store, "memory")
+        std::mem::drop(_wasmtime_instantiate);
+        let wasmtime_memory = if let Some(ext) = wasmtime_instance.get_export(&mut wasmtime_store, "memory")
         {
             ext.into_memory()
         } else {
             None
         };
         #[cfg(feature = "tracy")]
-        std::mem::drop(_winch_part);
+        std::mem::drop(_wasmtime_part);
 
         // Here we do _not_ supply the store with any fuel. Fuel is supplied
         // right before the VM is being run, i.e., before crossing the host->VM
@@ -315,9 +315,9 @@ impl Vm {
             store: RefCell::new(store),
             instance,
             memory,
-            winch_store: RefCell::new(winch_store),
-            winch_instance,
-            winch_memory,
+            wasmtime_store: RefCell::new(wasmtime_store),
+            wasmtime_instance,
+            wasmtime_memory,
         }))
     }
 
@@ -334,12 +334,12 @@ impl Vm {
                 contract_id,
                 parsed_module,
                 &cache.linker,
-                &cache.winch_linker,
+                &cache.wasmtime_linker,
             )
         } else {
             let linker = parsed_module.make_linker(host)?;
-            let winch_linker = parsed_module.make_winch_linker(host)?;
-            Self::instantiate(host, contract_id, parsed_module, &linker, &winch_linker)
+            let wasmtime_linker = parsed_module.make_wasmtime_linker(host)?;
+            Self::instantiate(host, contract_id, parsed_module, &linker, &wasmtime_linker)
         }
     }
 
@@ -387,8 +387,8 @@ impl Vm {
         VmInstantiationTimer::new(host.clone());
         let parsed_module = Self::parse_module(host, wasm, cost_inputs, cost_mode)?;
         let linker = parsed_module.make_linker(host)?;
-        let winch_linker = parsed_module.make_winch_linker(host)?;
-        Self::instantiate(host, contract_id, parsed_module, &linker, &winch_linker)
+        let wasmtime_linker = parsed_module.make_wasmtime_linker(host)?;
+        Self::instantiate(host, contract_id, parsed_module, &linker, &wasmtime_linker)
     }
 
     #[cfg(not(any(test, feature = "recording_mode")))]
@@ -465,8 +465,8 @@ impl Vm {
         }
     }
 
-    pub(crate) fn get_winch_memory(&self, host: &Host) -> Result<wasmtime::Memory, HostError> {
-        match self.winch_memory {
+    pub(crate) fn get_wasmtime_memory(&self, host: &Host) -> Result<wasmtime::Memory, HostError> {
+        match self.wasmtime_memory {
             Some(mem) => Ok(mem),
             None => Err(host.err(
                 ScErrorType::WasmVm,
@@ -600,21 +600,21 @@ impl Vm {
         )
     }
 
-    pub(crate) fn metered_winch_func_call(
+    pub(crate) fn metered_wasmtime_func_call(
         self: &Rc<Self>,
         host: &Host,
         func_sym: &Symbol,
         inputs: &[wasmtime::Val],
         treat_missing_function_as_noop: bool,
     ) -> Result<Val, HostError> {
-        let _span = tracy_span!("Vm::metered_winch_func_call");
+        let _span = tracy_span!("Vm::metered_wasmtime_func_call");
 
         host.charge_budget(ContractCostType::InvokeVmFunction, None)?;
 
         // resolve the function entity to be called
         let func_ss: SymbolStr = func_sym.try_into_val(host)?;
-        let ext = match self.winch_instance.get_export(
-            &mut *self.winch_store.try_borrow_mut_or_err()?,
+        let ext = match self.wasmtime_instance.get_export(
+            &mut *self.wasmtime_store.try_borrow_mut_or_err()?,
             func_ss.as_ref(),
         ) {
             None => {
@@ -655,22 +655,22 @@ impl Vm {
         // call the function
         let mut wasm_ret: [wasmtime::Val; 1] = [wasmtime::Val::I64(0)];
         let added_fuel = self
-            .winch_store
+            .wasmtime_store
             .try_borrow_mut_or_err()?
             .add_fuel_to_vm(host)?;
         host.set_last_vm_fuel(added_fuel)?;
 
         let res = {
-            let _span = tracy_span!("Vm::metered_winch_func_call - actual call");
+            let _span = tracy_span!("Vm::metered_wasmtime_func_call - actual call");
             func.call(
-                &mut *self.winch_store.try_borrow_mut_or_err()?,
+                &mut *self.wasmtime_store.try_borrow_mut_or_err()?,
                 inputs,
                 &mut wasm_ret,
             )
         };
 
         let last_fuel = host.get_last_vm_fuel()?;
-        self.winch_store
+        self.wasmtime_store
             .try_borrow_mut_or_err()?
             .return_fuel_to_host(host, last_fuel)?;
 
@@ -685,7 +685,7 @@ impl Vm {
     }
 
     // FIXME: remove when/if we decide to commit to this transition.
-    const FIRST_PROTOCOL_TO_RUN_ON_WINCH: u32 = 21;
+    const FIRST_PROTOCOL_TO_RUN_ON_WASMTIME: u32 = 21;
 
     pub(crate) fn invoke_function_raw(
         self: &Rc<Self>,
@@ -696,18 +696,18 @@ impl Vm {
     ) -> Result<Val, HostError> {
         let _span = tracy_span!("Vm::invoke_function_raw");
         Vec::<Value>::charge_bulk_init_cpy(args.len() as u64, host.as_budget())?;
-        if host.get_ledger_protocol_version()? >= Self::FIRST_PROTOCOL_TO_RUN_ON_WINCH {
-            let winch_args: Vec<wasmtime::Val> = args
+        if host.get_ledger_protocol_version()? >= Self::FIRST_PROTOCOL_TO_RUN_ON_WASMTIME {
+            let wasmtime_args: Vec<wasmtime::Val> = args
                 .iter()
                 .map(|i| {
                     host.absolute_to_relative(*i)
                         .map(|v| v.marshal_wasmtime_from_self())
                 })
                 .collect::<Result<Vec<wasmtime::Val>, HostError>>()?;
-            self.metered_winch_func_call(
+            self.metered_wasmtime_func_call(
                 host,
                 func_sym,
-                winch_args.as_slice(),
+                wasmtime_args.as_slice(),
                 treat_missing_function_as_noop,
             )
         } else {

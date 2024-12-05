@@ -2,7 +2,7 @@ use crate::{
     err,
     host::metered_clone::MeteredContainer,
     meta,
-    vm::get_winch_config,
+    vm::get_wasmtime_config,
     xdr::{
         ContractCostType, Limited, ReadXdr, ScEnvMetaEntry, ScEnvMetaEntryInterfaceVersion,
         ScErrorCode, ScErrorType,
@@ -144,7 +144,7 @@ impl VersionedContractCodeCostInputs {
 /// from the module when it was parsed.
 pub struct ParsedModule {
     pub module: Module,
-    pub winch_module: wasmtime::Module,
+    pub wasmtime_module: wasmtime::Module,
     pub proto_version: u32,
     pub cost_inputs: VersionedContractCodeCostInputs,
 }
@@ -153,16 +153,16 @@ impl ParsedModule {
     pub fn new(
         host: &Host,
         engine: &Engine,
-        winch_engine: &wasmtime::Engine,
+        wasmtime_engine: &wasmtime::Engine,
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
     ) -> Result<Rc<Self>, HostError> {
         cost_inputs.charge_for_parsing(host)?;
-        let (module, winch_module, proto_version) =
-            Self::parse_wasm(host, engine, winch_engine, wasm)?;
+        let (module, wasmtime_module, proto_version) =
+            Self::parse_wasm(host, engine, wasmtime_engine, wasm)?;
         Ok(Rc::new(Self {
             module,
-            winch_module,
+            wasmtime_module,
             proto_version,
             cost_inputs,
         }))
@@ -208,9 +208,9 @@ impl ParsedModule {
         })
     }
 
-    pub fn make_winch_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
+    pub fn make_wasmtime_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
         self.with_import_symbols(host, |symbols| {
-            Host::make_winch_linker(host, self.winch_module.engine(), symbols)
+            Host::make_wasmtime_linker(host, self.wasmtime_module.engine(), symbols)
         })
     }
 
@@ -223,32 +223,32 @@ impl ParsedModule {
         let config = crate::vm::get_wasmi_config(host.as_budget())?;
         let engine = Engine::new(&config);
 
-        let winch_config = get_winch_config(host.as_budget())?;
-        let winch_engine = host.map_wasmtime_error(wasmtime::Engine::new(&winch_config))?;
+        let wasmtime_config = get_wasmtime_config(host.as_budget())?;
+        let wasmtime_engine = host.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
 
-        Self::new(host, &engine, &winch_engine, wasm, cost_inputs)
+        Self::new(host, &engine, &wasmtime_engine, wasm, cost_inputs)
     }
 
     /// Parse the Wasm blob into a [Module] and its protocol number, checking its interface version
     fn parse_wasm(
         host: &Host,
         engine: &Engine,
-        winch_engine: &wasmtime::Engine,
+        wasmtime_engine: &wasmtime::Engine,
         wasm: &[u8],
     ) -> Result<(Module, wasmtime::Module, u32), HostError> {
         let module = {
             let _span0 = tracy_span!("parse_wasm (wasmi)");
             host.map_err(Module::new(&engine, wasm))?
         };
-        let winch_module = host.map_wasmtime_error(
-            populate_or_retrieve_cached_wasmtime_winch_module(wasm, winch_engine),
+        let wasmtime_module = host.map_wasmtime_error(
+            populate_or_retrieve_cached_wasmtime_wasmtime_module(wasm, wasmtime_engine),
         )?;
 
         Self::check_max_args(host, &module)?;
         let interface_version = Self::check_meta_section(host, &module)?;
         let contract_proto = interface_version.protocol;
 
-        Ok((module, winch_module, contract_proto))
+        Ok((module, wasmtime_module, contract_proto))
     }
 
     fn check_contract_interface_version(
@@ -633,11 +633,11 @@ impl ParsedModule {
     }
 }
 
-fn populate_or_retrieve_cached_wasmtime_winch_module(
+fn populate_or_retrieve_cached_wasmtime_wasmtime_module(
     wasm_bytes: &[u8],
     engine: &wasmtime::Engine,
 ) -> Result<wasmtime::Module, wasmtime::Error> {
-    let _span = tracy_span!("get-or-make winch module");
+    let _span = tracy_span!("get-or-make wasmtime module");
     let mut path = std::env::temp_dir();
     path.push("soroban-contracts");
     if !path.exists() {
@@ -646,15 +646,15 @@ fn populate_or_retrieve_cached_wasmtime_winch_module(
     let mod_hash: [u8; 32] = <Sha256 as sha2::Digest>::digest(wasm_bytes).into();
     let mod_hex = hex::encode(mod_hash);
     path.push(mod_hex);
-    path.set_extension("winch.zst");
+    path.set_extension("wasmtime.zst");
     if path.exists() {
         let compressed_bytes = {
-            let _read_span = tracy_span!("std::fs::read winch.zst");
+            let _read_span = tracy_span!("std::fs::read wasmtime.zst");
             std::fs::read(&path)?
         };
         let decompressed_bytes = {
             let mut decompressed_bytes = Vec::new();
-            let _decompress_span = tracy_span!("decompress winch.zst");
+            let _decompress_span = tracy_span!("decompress wasmtime.zst");
             copy_decode(&compressed_bytes[..], &mut decompressed_bytes)?;
             decompressed_bytes
         };
@@ -665,7 +665,7 @@ fn populate_or_retrieve_cached_wasmtime_winch_module(
         Ok(module)
     } else {
         let module = wasmtime::Module::new(&engine, &wasm_bytes)?;
-        let winch_bytes = {
+        let wasmtime_bytes = {
             let _serialize_span = tracy_span!("wasmtime::Module::serialize");
             module.serialize()?
         };
@@ -673,12 +673,12 @@ fn populate_or_retrieve_cached_wasmtime_winch_module(
             // 0 means "default" which is usually "level 3"
             const COMPRESSION_LEVEL: i32 = 0;
             let mut compressed_bytes = Vec::new();
-            let _compress_span = tracy_span!("compress winch.zst");
-            copy_encode(&winch_bytes[..], &mut compressed_bytes, COMPRESSION_LEVEL)?;
+            let _compress_span = tracy_span!("compress wasmtime.zst");
+            copy_encode(&wasmtime_bytes[..], &mut compressed_bytes, COMPRESSION_LEVEL)?;
             compressed_bytes
         };
         {
-            let _write_span = tracy_span!("std::fs::write winch.zst");
+            let _write_span = tracy_span!("std::fs::write wasmtime.zst");
             std::fs::write(&path, &compressed_bytes)?;
         }
         {

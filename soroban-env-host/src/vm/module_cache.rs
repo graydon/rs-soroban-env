@@ -1,6 +1,6 @@
 use super::{
     func_info::HOST_FUNCTIONS,
-    get_winch_config,
+    get_wasmtime_config,
     parsed_module::{ParsedModule, VersionedContractCodeCostInputs},
 };
 use crate::{
@@ -24,9 +24,9 @@ use wasmi::{Engine, Linker};
 #[derive(Clone, Default)]
 pub struct ModuleCache {
     pub(crate) engine: Engine,
-    pub(crate) winch_engine: wasmtime::Engine,
+    pub(crate) wasmtime_engine: wasmtime::Engine,
     pub(crate) linker: Linker<Host>,
-    pub(crate) winch_linker: wasmtime::Linker<Host>,
+    pub(crate) wasmtime_linker: wasmtime::Linker<Host>,
     modules: ModuleCacheMap,
 }
 
@@ -107,18 +107,18 @@ impl ModuleCache {
         let config = get_wasmi_config(host.as_budget())?;
         let engine = Engine::new(&config);
 
-        let winch_config = get_winch_config(host.as_budget())?;
-        let winch_engine = host.map_wasmtime_error(wasmtime::Engine::new(&winch_config))?;
+        let wasmtime_config = get_wasmtime_config(host.as_budget())?;
+        let wasmtime_engine = host.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
 
         let modules = ModuleCacheMap::MeteredSingleUseMap(MeteredOrdMap::new());
         let linker = wasmi::Linker::new(&engine);
-        let winch_linker = wasmtime::Linker::new(&winch_engine);
+        let wasmtime_linker = wasmtime::Linker::new(&wasmtime_engine);
         let mut cache = Self {
             engine,
-            winch_engine,
+            wasmtime_engine,
             modules,
             linker,
-            winch_linker,
+            wasmtime_linker,
         };
         cache.add_stored_contracts(host)?;
         Ok(cache)
@@ -143,7 +143,7 @@ impl ModuleCache {
             ));
         }
         self.linker = Host::make_maximal_linker(&self.engine)?;
-        self.winch_linker = Host::make_maximal_winch_linker(host, &self.winch_engine)?;
+        self.wasmtime_linker = Host::make_maximal_wasmtime_linker(host, &self.wasmtime_engine)?;
         Ok(())
     }
 
@@ -250,7 +250,7 @@ impl ModuleCache {
             // mentioned by any modules we're actually going to use will speed up
             // the next two lines constructing nontrivial linkers.
             self.linker = self.make_linker(host)?;
-            self.winch_linker = self.make_winch_linker(host)?;
+            self.wasmtime_linker = self.make_wasmtime_linker(host)?;
         }
         Ok(())
     }
@@ -294,7 +294,7 @@ impl ModuleCache {
             }
         }
         let parsed_module =
-            ParsedModule::new(host, &self.engine, &self.winch_engine, &wasm, cost_inputs)?;
+            ParsedModule::new(host, &self.engine, &self.wasmtime_engine, &wasm, cost_inputs)?;
         self.modules.insert(
             contract_id.metered_clone(host)?,
             parsed_module,
@@ -343,9 +343,9 @@ impl ModuleCache {
         self.with_import_symbols(host, |symbols| Host::make_linker(&self.engine, symbols))
     }
 
-    pub fn make_winch_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
+    pub fn make_wasmtime_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
         self.with_import_symbols(host, |symbols| {
-            Host::make_winch_linker(host, &self.winch_engine, symbols)
+            Host::make_wasmtime_linker(host, &self.wasmtime_engine, symbols)
         })
     }
 

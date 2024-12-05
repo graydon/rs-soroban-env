@@ -59,7 +59,7 @@ impl<'a, T> VmCaller<'a, T> {
         }
     }
     #[cfg(feature = "wasmtime")]
-    pub fn try_ref_winch(&self) -> Result<&wasmtime::Caller<'a, T>, Error> {
+    pub fn try_ref_wasmtime(&self) -> Result<&wasmtime::Caller<'a, T>, Error> {
         match self {
             VmCaller::WasmtimeCaller(caller) => Ok(caller),
             _ => Err(Error::from_type_and_code(
@@ -69,7 +69,7 @@ impl<'a, T> VmCaller<'a, T> {
         }
     }
     #[cfg(feature = "wasmtime")]
-    pub fn try_mut_winch(&mut self) -> Result<&mut wasmtime::Caller<'a, T>, Error> {
+    pub fn try_mut_wasmtime(&mut self) -> Result<&mut wasmtime::Caller<'a, T>, Error> {
         match self {
             VmCaller::WasmtimeCaller(caller) => Ok(caller),
             _ => Err(Error::from_type_and_code(

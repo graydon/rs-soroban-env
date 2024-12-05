@@ -138,7 +138,7 @@ pub(crate) fn get_wasmi_config(budget: &Budget) -> Result<wasmi::Config, HostErr
     Ok(config)
 }
 
-pub(crate) fn get_winch_config(_budget: &Budget) -> Result<wasmtime::Config, HostError> {
+pub(crate) fn get_wasmtime_config(_budget: &Budget) -> Result<wasmtime::Config, HostError> {
     let mut config = wasmtime::Config::new();
     config
         .strategy(wasmtime::Strategy::Winch)

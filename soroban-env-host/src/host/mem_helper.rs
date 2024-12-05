@@ -89,7 +89,7 @@ impl Host {
                 )
             }
             VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_winch_memory(self)?;
+                let mem = vm.get_wasmtime_memory(self)?;
                 self.map_err(mem.write(ctx, mem_pos as usize, buf))
             }
             _ => Err(crate::Error::from_type_and_code(
@@ -118,7 +118,7 @@ impl Host {
                 )
             }
             VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_winch_memory(self)?;
+                let mem = vm.get_wasmtime_memory(self)?;
                 self.map_err(mem.read(ctx, mem_pos as usize, buf))
             }
             _ => Err(crate::Error::from_type_and_code(
@@ -141,7 +141,7 @@ impl Host {
                 Ok(mem.data_mut(ctx))
             }
             VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_winch_memory(self)?;
+                let mem = vm.get_wasmtime_memory(self)?;
                 Ok(mem.data_mut(ctx))
             }
             _ => Err(crate::Error::from_type_and_code(
@@ -164,7 +164,7 @@ impl Host {
                 Ok(mem.data(ctx))
             }
             VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_winch_memory(self)?;
+                let mem = vm.get_wasmtime_memory(self)?;
                 Ok(mem.data(ctx))
             }
             _ => Err(crate::Error::from_type_and_code(

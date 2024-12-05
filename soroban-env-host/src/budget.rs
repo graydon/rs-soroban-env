@@ -7,7 +7,7 @@ mod wasmi_helper;
 pub(crate) use limits::DepthLimiter;
 pub use limits::{DEFAULT_HOST_DEPTH_LIMIT, DEFAULT_XDR_RW_LIMITS};
 pub use model::{MeteredCostComponent, ScaledU64};
-pub(crate) use wasmi_helper::{get_wasmi_config, get_winch_config, load_calibrated_fuel_costs};
+pub(crate) use wasmi_helper::{get_wasmi_config, get_wasmtime_config, load_calibrated_fuel_costs};
 
 use std::{
     cell::{RefCell, RefMut},

@@ -90,9 +90,9 @@ impl_refillable_for_store!(Caller<'a, Host>);
 const VM_INTERNAL_ERROR: Error =
     Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InternalError);
 
-const WINCH_FUEL_FACTOR: u64 = 1;
+const WASMTIME_FUEL_FACTOR: u64 = 1;
 
-macro_rules! impl_refillable_for_winch_store {
+macro_rules! impl_refillable_for_wasmtime_store {
     ($store: ty) => {
         impl<'a> FuelRefillable for $store {
             fn fuel_consumed(&self, initial_fuel: u64) -> Result<u64, HostError> {
@@ -102,7 +102,7 @@ macro_rules! impl_refillable_for_winch_store {
 
             fn fuel_total(&self) -> Result<u64, HostError> {
                 self.get_fuel()
-                    .map(|fuel| fuel.saturating_div(WINCH_FUEL_FACTOR))
+                    .map(|fuel| fuel.saturating_div(WASMTIME_FUEL_FACTOR))
                     .map_err(|_| HostError::from(VM_INTERNAL_ERROR))
             }
 
@@ -110,7 +110,7 @@ macro_rules! impl_refillable_for_winch_store {
                 let existing_fuel = self.fuel_total()?;
                 let new_fuel = existing_fuel
                     .saturating_add(fuel)
-                    .saturating_mul(WINCH_FUEL_FACTOR);
+                    .saturating_mul(WASMTIME_FUEL_FACTOR);
                 self.set_fuel(new_fuel)
                     .map_err(|_| HostError::from(VM_INTERNAL_ERROR))
             }
@@ -122,5 +122,5 @@ macro_rules! impl_refillable_for_winch_store {
         }
     };
 }
-impl_refillable_for_winch_store!(wasmtime::Store<Host>);
-impl_refillable_for_winch_store!(wasmtime::Caller<'a, Host>);
+impl_refillable_for_wasmtime_store!(wasmtime::Store<Host>);
+impl_refillable_for_wasmtime_store!(wasmtime::Caller<'a, Host>);
