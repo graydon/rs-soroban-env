@@ -30,7 +30,7 @@ use crate::{
     xdr::{ContractCostType, Hash, ScErrorCode, ScErrorType},
     ConversionError, Host, HostError, Symbol, SymbolStr, TryIntoVal, Val, WasmiMarshal,
 };
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::Arc};
 
 use fuel_refillable::FuelRefillable;
 use func_info::HOST_FUNCTIONS;
@@ -87,7 +87,7 @@ impl Drop for VmInstantiationTimer {
 pub struct Vm {
     pub(crate) contract_id: Hash,
     #[allow(dead_code)]
-    pub(crate) module: Rc<ParsedModule>,
+    pub(crate) module: Arc<ParsedModule>,
     store: RefCell<Store<Host>>,
     instance: Instance,
     pub(crate) memory: Option<Memory>,
@@ -104,11 +104,13 @@ impl std::hash::Hash for Vm {
 }
 
 impl Host {
-    pub(crate) fn make_linker(
+    // Make a wasmi linker restricted to _only_ importing the symbols
+    // mentioned in `symbols`.
+    pub(crate) fn make_minimal_wasmi_linker_for_symbols(
         engine: &wasmi::Engine,
         symbols: &BTreeSet<(&str, &str)>,
-    ) -> Result<Linker<Host>, HostError> {
-        let mut linker = Linker::new(&engine);
+    ) -> Result<wasmi::Linker<Host>, HostError> {
+        let mut linker = wasmi::Linker::new(&engine);
         for hf in HOST_FUNCTIONS {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
                 (hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le))?;
@@ -117,40 +119,43 @@ impl Host {
         Ok(linker)
     }
 
-    pub(crate) fn make_maximal_linker(engine: &wasmi::Engine) -> Result<Linker<Host>, HostError> {
-        let mut linker = Linker::new(&engine);
+    // Make a wasmi linker that imports all the symbols.
+    pub(crate) fn make_maximal_wasmi_linker(
+        engine: &wasmi::Engine,
+    ) -> Result<wasmi::Linker<Host>, HostError> {
+        let mut linker = wasmi::Linker::new(&engine);
         for hf in HOST_FUNCTIONS {
             (hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le))?;
         }
         Ok(linker)
     }
 
-    pub(crate) fn make_wasmtime_linker(
-        host: &Host,
+    // Make a wasmtime linker restricted to _only_ importing the symbols
+    // mentioned in `symbols`.
+    pub(crate) fn make_minimal_wasmtime_linker_for_symbols(
         engine: &wasmtime::Engine,
         symbols: &BTreeSet<(&str, &str)>,
     ) -> Result<wasmtime::Linker<Host>, HostError> {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
-                host.map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
+                HostError::map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
             }
         }
         Ok(linker)
     }
 
+    // Make a wasmtime linker that imports all the symbols.
     pub(crate) fn make_maximal_wasmtime_linker(
-        host: &Host,
         engine: &wasmtime::Engine,
     ) -> Result<wasmtime::Linker<Host>, HostError> {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
-            host.map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
+            HostError::map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
         }
         Ok(linker)
     }
 }
-
 // In one very narrow context -- when recording, and with a module cache -- we
 // defer the cost of parsing a module until we pop a control frame.
 // Unfortunately we have to thread this information from the call site to here.
@@ -189,7 +194,7 @@ impl Vm {
     fn instantiate(
         host: &Host,
         contract_id: Hash,
-        parsed_module: Rc<ParsedModule>,
+        parsed_module: Arc<ParsedModule>,
         linker: &Linker<Host>,
         wasmtime_linker: &wasmtime::Linker<Host>,
     ) -> Result<Rc<Self>, HostError> {
@@ -297,12 +302,12 @@ impl Vm {
         )?;
         #[cfg(feature = "tracy")]
         std::mem::drop(_wasmtime_instantiate);
-        let wasmtime_memory = if let Some(ext) = wasmtime_instance.get_export(&mut wasmtime_store, "memory")
-        {
-            ext.into_memory()
-        } else {
-            None
-        };
+        let wasmtime_memory =
+            if let Some(ext) = wasmtime_instance.get_export(&mut wasmtime_store, "memory") {
+                ext.into_memory()
+            } else {
+                None
+            };
         #[cfg(feature = "tracy")]
         std::mem::drop(_wasmtime_part);
 
@@ -324,7 +329,7 @@ impl Vm {
     pub fn from_parsed_module(
         host: &Host,
         contract_id: Hash,
-        parsed_module: Rc<ParsedModule>,
+        parsed_module: Arc<ParsedModule>,
     ) -> Result<Rc<Self>, HostError> {
         let _span = tracy_span!("Vm::from_parsed_module");
         VmInstantiationTimer::new(host.clone());
@@ -333,7 +338,7 @@ impl Vm {
                 host,
                 contract_id,
                 parsed_module,
-                &cache.linker,
+                &cache.wasmi_linker,
                 &cache.wasmtime_linker,
             )
         } else {
@@ -442,7 +447,7 @@ impl Vm {
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
         cost_mode: ModuleParseCostMode,
-    ) -> Result<Rc<ParsedModule>, HostError> {
+    ) -> Result<Arc<ParsedModule>, HostError> {
         if cost_mode == ModuleParseCostMode::PossiblyDeferredIfRecording {
             if host.in_storage_recording_mode()? {
                 return host.budget_ref().with_observable_shadow_mode(|| {

@@ -16,7 +16,7 @@ use wasmtime;
 use wasmi::{Engine, Module};
 
 use super::Vm;
-use std::{collections::BTreeSet, io::Cursor, rc::Rc};
+use std::{collections::BTreeSet, io::Cursor, sync::Arc};
 use zstd::stream::{copy_decode, copy_encode};
 
 #[derive(Debug, Clone)]
@@ -156,11 +156,11 @@ impl ParsedModule {
         wasmtime_engine: &wasmtime::Engine,
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
-    ) -> Result<Rc<Self>, HostError> {
+    ) -> Result<Arc<Self>, HostError> {
         cost_inputs.charge_for_parsing(host)?;
         let (module, wasmtime_module, proto_version) =
             Self::parse_wasm(host, engine, wasmtime_engine, wasm)?;
-        Ok(Rc::new(Self {
+        Ok(Arc::new(Self {
             module,
             wasmtime_module,
             proto_version,
@@ -204,13 +204,13 @@ impl ParsedModule {
 
     pub fn make_linker(&self, host: &Host) -> Result<wasmi::Linker<Host>, HostError> {
         self.with_import_symbols(host, |symbols| {
-            Host::make_linker(self.module.engine(), symbols)
+            Host::make_minimal_wasmi_linker_for_symbols(self.module.engine(), symbols)
         })
     }
 
     pub fn make_wasmtime_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
         self.with_import_symbols(host, |symbols| {
-            Host::make_wasmtime_linker(host, self.wasmtime_module.engine(), symbols)
+            Host::make_minimal_wasmtime_linker_for_symbols(self.wasmtime_module.engine(), symbols)
         })
     }
 
@@ -218,7 +218,7 @@ impl ParsedModule {
         host: &Host,
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
-    ) -> Result<Rc<Self>, HostError> {
+    ) -> Result<Arc<Self>, HostError> {
         use crate::budget::AsBudget;
         let config = crate::vm::get_wasmi_config(host.as_budget())?;
         let engine = Engine::new(&config);
@@ -674,7 +674,11 @@ fn populate_or_retrieve_cached_wasmtime_wasmtime_module(
             const COMPRESSION_LEVEL: i32 = 0;
             let mut compressed_bytes = Vec::new();
             let _compress_span = tracy_span!("compress wasmtime.zst");
-            copy_encode(&wasmtime_bytes[..], &mut compressed_bytes, COMPRESSION_LEVEL)?;
+            copy_encode(
+                &wasmtime_bytes[..],
+                &mut compressed_bytes,
+                COMPRESSION_LEVEL,
+            )?;
             compressed_bytes
         };
         {

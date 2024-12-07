@@ -11,10 +11,8 @@ use crate::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    rc::Rc,
     sync::{Arc, Mutex, MutexGuard},
 };
-use wasmi::{Engine, Linker};
 
 /// A [ModuleCache] is a cache of a set of Wasm modules that have been parsed
 /// but not yet instantiated, along with a shared and reusable [Engine] storing
@@ -23,12 +21,17 @@ use wasmi::{Engine, Linker};
 /// [Engine] is locked during execution and no new modules can be added to it.
 #[derive(Clone, Default)]
 pub struct ModuleCache {
-    pub(crate) engine: Engine,
+    pub(crate) wasmi_engine: wasmi::Engine,
     pub(crate) wasmtime_engine: wasmtime::Engine,
-    pub(crate) linker: Linker<Host>,
+    pub(crate) wasmi_linker: wasmi::Linker<Host>,
     pub(crate) wasmtime_linker: wasmtime::Linker<Host>,
     modules: ModuleCacheMap,
 }
+
+// We may use the ModuleCache from multiple C++ theads where
+// there's no checking of Send+Sync but we can at least ensure
+// Rust thinks its API is thread-safe.
+static_assertions::assert_impl_all!(ModuleCache: Send, Sync);
 
 // The module cache was originally designed as an immutable object
 // established at host creation time and never updated. In order to support
@@ -38,7 +41,6 @@ pub struct ModuleCache {
 // - Modules can be added post-construction.
 // - Adding an existing module is a harmless no-op, not an error.
 // - The linkers are set to "maximal" mode to cover all possible imports.
-// - Randomized cache-trimming is enabled.
 // - The cache easily scales to a large number of modules, unlike MeteredOrdMap.
 // - There is no metering of cache map operations.
 // - The cache can be cloned, but the clone is a shallow copy.
@@ -46,8 +48,8 @@ pub struct ModuleCache {
 
 #[derive(Clone)]
 enum ModuleCacheMap {
-    MeteredSingleUseMap(MeteredOrdMap<Hash, Rc<ParsedModule>, Budget>),
-    UnmeteredReusableMap(Arc<Mutex<BTreeMap<Hash, Rc<ParsedModule>>>>),
+    MeteredSingleUseMap(MeteredOrdMap<Hash, Arc<ParsedModule>, Budget>),
+    UnmeteredReusableMap(Arc<Mutex<BTreeMap<Hash, Arc<ParsedModule>>>>),
 }
 
 impl Default for ModuleCacheMap {
@@ -58,8 +60,8 @@ impl Default for ModuleCacheMap {
 
 impl ModuleCacheMap {
     fn lock_map(
-        map: &Arc<Mutex<BTreeMap<Hash, Rc<ParsedModule>>>>,
-    ) -> Result<MutexGuard<BTreeMap<Hash, Rc<ParsedModule>>>, HostError> {
+        map: &Arc<Mutex<BTreeMap<Hash, Arc<ParsedModule>>>>,
+    ) -> Result<MutexGuard<BTreeMap<Hash, Arc<ParsedModule>>>, HostError> {
         map.lock()
             .map_err(|_| HostError::from((ScErrorType::Context, ScErrorCode::InternalError)))
     }
@@ -75,7 +77,7 @@ impl ModuleCacheMap {
         }
     }
 
-    fn get(&self, key: &Hash, budget: &Budget) -> Result<Option<Rc<ParsedModule>>, HostError> {
+    fn get(&self, key: &Hash, budget: &Budget) -> Result<Option<Arc<ParsedModule>>, HostError> {
         match self {
             Self::MeteredSingleUseMap(map) => Ok(map.get(key, budget)?.map(|rc| rc.clone())),
             Self::UnmeteredReusableMap(map) => {
@@ -87,7 +89,7 @@ impl ModuleCacheMap {
     fn insert(
         &mut self,
         key: Hash,
-        value: Rc<ParsedModule>,
+        value: Arc<ParsedModule>,
         budget: &Budget,
     ) -> Result<(), HostError> {
         match self {
@@ -104,97 +106,53 @@ impl ModuleCacheMap {
 
 impl ModuleCache {
     pub fn new(host: &Host) -> Result<Self, HostError> {
-        let config = get_wasmi_config(host.as_budget())?;
-        let engine = Engine::new(&config);
+        let wasmi_config = get_wasmi_config(host.as_budget())?;
+        let wasmi_engine = wasmi::Engine::new(&wasmi_config);
 
         let wasmtime_config = get_wasmtime_config(host.as_budget())?;
         let wasmtime_engine = host.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
 
         let modules = ModuleCacheMap::MeteredSingleUseMap(MeteredOrdMap::new());
-        let linker = wasmi::Linker::new(&engine);
+        let wasmi_linker = wasmi::Linker::new(&wasmi_engine);
         let wasmtime_linker = wasmtime::Linker::new(&wasmtime_engine);
         let mut cache = Self {
-            engine,
+            wasmi_engine,
             wasmtime_engine,
             modules,
-            linker,
+            wasmi_linker,
             wasmtime_linker,
         };
+
+        // Now add the contracts and rebuild linkers restricted to them.
         cache.add_stored_contracts(host)?;
+        cache.wasmi_linker = cache.make_minimal_wasmi_linker_for_cached_modules(host)?;
+        cache.wasmtime_linker = cache.make_minimal_wasmtime_linker_for_cached_modules(host)?;
         Ok(cache)
     }
 
     pub fn new_reusable(host: &Host) -> Result<Self, HostError> {
-        let mut cache = Self::new(host)?;
-        cache.modules = ModuleCacheMap::UnmeteredReusableMap(Arc::new(Mutex::new(BTreeMap::new())));
-        cache.set_linkers_to_maximal(host)?;
-        Ok(cache)
+        let wasmi_config = get_wasmi_config(host.as_budget())?;
+        let wasmi_engine = wasmi::Engine::new(&wasmi_config);
+
+        let wasmtime_config = get_wasmtime_config(host.as_budget())?;
+        let wasmtime_engine = host.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
+
+        let modules = ModuleCacheMap::UnmeteredReusableMap(Arc::new(Mutex::new(BTreeMap::new())));
+
+        let wasmi_linker = Host::make_maximal_wasmi_linker(&wasmi_engine)?;
+        let wasmtime_linker = Host::make_maximal_wasmtime_linker(&wasmtime_engine)?;
+
+        Ok(Self {
+            wasmi_engine,
+            wasmtime_engine,
+            modules,
+            wasmi_linker,
+            wasmtime_linker,
+        })
     }
 
-    // Set the linkers in the module cache to allow all possible symbols, which
-    // is usually the setting you want when using a module cache incrementally.
-    pub fn set_linkers_to_maximal(&mut self, host: &Host) -> Result<(), HostError> {
-        if !self.modules.is_reusable() {
-            return Err(host.err(
-                ScErrorType::Context,
-                ScErrorCode::InternalError,
-                "set_linkers_to_maximal called on non-reusable cache",
-                &[],
-            ));
-        }
-        self.linker = Host::make_maximal_linker(&self.engine)?;
-        self.wasmtime_linker = Host::make_maximal_wasmtime_linker(host, &self.wasmtime_engine)?;
-        Ok(())
-    }
-
-    // Using the host's attached PRNG, randomly trim elements from the cache
-    // until it's the given size.
-    pub fn randomly_trim_to_max_size(&mut self, host: &Host, sz: usize) -> Result<(), HostError> {
-        let ModuleCacheMap::UnmeteredReusableMap(modules) = &mut self.modules else {
-            return Err(host.err(
-                ScErrorType::Context,
-                ScErrorCode::InternalError,
-                "randomly_trim_to_max_size called on non-UnmeteredReusableMap cache",
-                &[],
-            ));
-        };
-        let mut modules = ModuleCacheMap::lock_map(modules)?;
-        if sz == 0 {
-            modules.clear();
-        } else {
-            if modules.len() > sz {
-                let Some(prng) = &mut *host.try_borrow_base_prng_mut()? else {
-                    return Err(host.err(
-                        ScErrorType::Context,
-                        ScErrorCode::InternalError,
-                        "no base PRNG available",
-                        &[],
-                    ));
-                };
-
-                // If we draw a uniform random value in 0..n, and we do this n
-                // times, we expect to draw each value in that range about once.
-                // The number of those draws that are less than some number sz
-                // should be about the same magnitude as sz. This is slightly
-                // noisy so we do it in an outer while loop, but the expected
-                // number of iterations is 1 or 2.
-                //
-                // If the budget runs out, it will over-trim the cache (the
-                // predicate returns true on everything) which will at least
-                // exit the loop quickly. But you should try not to run out of
-                // budget; this is intended to be run in the unmetered case on a
-                // host that is a fake-host with an infinite budget.
-                while modules.len() > sz {
-                    let n = modules.len() as u64 - 1;
-                    modules.retain(|_, _| {
-                        prng.u64_in_inclusive_range(0..=n, host.as_budget())
-                            .unwrap_or_default()
-                            < sz as u64
-                    });
-                }
-            }
-        }
-        Ok(())
+    pub fn is_reusable(&self) -> bool {
+        self.modules.is_reusable()
     }
 
     pub fn add_stored_contracts(&mut self, host: &Host) -> Result<(), HostError> {
@@ -243,15 +201,6 @@ impl ModuleCache {
                 }
             }
         }
-        if !self.modules.is_reusable() {
-            // Update the linkers to (only) include symbols mentioned in the added
-            // modules. The initial (trivial, empty) linkers the ModuleCache is
-            // constructed with have _no_ symbols, and limiting additions those
-            // mentioned by any modules we're actually going to use will speed up
-            // the next two lines constructing nontrivial linkers.
-            self.linker = self.make_linker(host)?;
-            self.wasmtime_linker = self.make_wasmtime_linker(host)?;
-        }
         Ok(())
     }
 
@@ -293,8 +242,13 @@ impl ModuleCache {
                 ));
             }
         }
-        let parsed_module =
-            ParsedModule::new(host, &self.engine, &self.wasmtime_engine, &wasm, cost_inputs)?;
+        let parsed_module = ParsedModule::new(
+            host,
+            &self.wasmi_engine,
+            &self.wasmtime_engine,
+            &wasm,
+            cost_inputs,
+        )?;
         self.modules.insert(
             contract_id.metered_clone(host)?,
             parsed_module,
@@ -303,7 +257,7 @@ impl ModuleCache {
         Ok(())
     }
 
-    pub fn with_import_symbols<T>(
+    fn with_minimal_import_symbols<T>(
         &self,
         host: &Host,
         callback: impl FnOnce(&BTreeSet<(&str, &str)>) -> Result<T, HostError>,
@@ -339,13 +293,21 @@ impl ModuleCache {
         callback(&import_symbols)
     }
 
-    pub fn make_linker(&self, host: &Host) -> Result<wasmi::Linker<Host>, HostError> {
-        self.with_import_symbols(host, |symbols| Host::make_linker(&self.engine, symbols))
+    fn make_minimal_wasmi_linker_for_cached_modules(
+        &self,
+        host: &Host,
+    ) -> Result<wasmi::Linker<Host>, HostError> {
+        self.with_minimal_import_symbols(host, |symbols| {
+            Host::make_minimal_wasmi_linker_for_symbols(&self.wasmi_engine, symbols)
+        })
     }
 
-    pub fn make_wasmtime_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
-        self.with_import_symbols(host, |symbols| {
-            Host::make_wasmtime_linker(host, &self.wasmtime_engine, symbols)
+    fn make_minimal_wasmtime_linker_for_cached_modules(
+        &self,
+        host: &Host,
+    ) -> Result<wasmtime::Linker<Host>, HostError> {
+        self.with_minimal_import_symbols(host, |symbols| {
+            Host::make_minimal_wasmtime_linker_for_symbols(&self.wasmtime_engine, symbols)
         })
     }
 
@@ -357,7 +319,7 @@ impl ModuleCache {
         &self,
         host: &Host,
         wasm_hash: &Hash,
-    ) -> Result<Option<Rc<ParsedModule>>, HostError> {
+    ) -> Result<Option<Arc<ParsedModule>>, HostError> {
         if let Some(m) = self.modules.get(wasm_hash, host.as_budget())? {
             Ok(Some(m.clone()))
         } else {

@@ -395,9 +395,18 @@ impl Host {
 
     // Install a module cache from _outside_ the Host. Doing this is potentially
     // delicate: the cache must contain all contracts that will be run by the
-    // host, and will not be further populated during execution.
-    pub fn set_module_cache(&self, mut cache: ModuleCache) -> Result<(), HostError> {
-        cache.add_stored_contracts(self)?;
+    // host, and will not be further populated during execution. This is
+    // only allowed if the cache is of "reusable" type, i.e. it was created
+    // using `ModuleCache::new_reusable`.
+    pub fn set_module_cache(&self, cache: ModuleCache) -> Result<(), HostError> {
+        if !cache.is_reusable() {
+            return Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+                "module cache not reusable",
+                &[],
+            ));
+        }
         *self.try_borrow_module_cache_mut()? = Some(cache);
         Ok(())
     }
