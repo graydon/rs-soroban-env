@@ -83,6 +83,7 @@ mod v21 {
                     let module = black_box(
                         ParsedModule::new(
                             host,
+                            host.get_ledger_protocol_version(),
                             sample.module.module.engine(),
                             sample.module.wasmtime_module.engine(),
                             &sample.wasm[..],

@@ -1,4 +1,5 @@
 use crate::{
+    budget::AsBudget,
     err,
     host::metered_clone::MeteredContainer,
     meta,
@@ -7,7 +8,7 @@ use crate::{
         ContractCostType, Limited, ReadXdr, ScEnvMetaEntry, ScEnvMetaEntryInterfaceVersion,
         ScErrorCode, ScErrorType,
     },
-    Host, HostError, DEFAULT_XDR_RW_LIMITS,
+    ErrorHandler, Host, HostError, Val, DEFAULT_XDR_RW_LIMITS,
 };
 
 use sha2::Sha256;
@@ -32,49 +33,50 @@ impl VersionedContractCodeCostInputs {
             Self::V1(_) => false,
         }
     }
-    pub fn charge_for_parsing(&self, host: &Host) -> Result<(), HostError> {
+    pub fn charge_for_parsing(&self, budget: &impl AsBudget) -> Result<(), HostError> {
+        let budget = budget.as_budget();
         match self {
             Self::V0 { wasm_bytes } => {
-                host.charge_budget(ContractCostType::VmInstantiation, Some(*wasm_bytes as u64))?;
+                budget.charge(ContractCostType::VmInstantiation, Some(*wasm_bytes as u64))?;
             }
             Self::V1(inputs) => {
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmInstructions,
                     Some(inputs.n_instructions as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmFunctions,
                     Some(inputs.n_functions as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmGlobals,
                     Some(inputs.n_globals as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmTableEntries,
                     Some(inputs.n_table_entries as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmTypes,
                     Some(inputs.n_types as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmDataSegments,
                     Some(inputs.n_data_segments as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmElemSegments,
                     Some(inputs.n_elem_segments as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmImports,
                     Some(inputs.n_imports as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmExports,
                     Some(inputs.n_exports as u64),
                 )?;
-                host.charge_budget(
+                budget.charge(
                     ContractCostType::ParseWasmDataSegmentBytes,
                     Some(inputs.n_data_segment_bytes as u64),
                 )?;
@@ -143,25 +145,31 @@ impl VersionedContractCodeCostInputs {
 /// as well as a protocol number and set of [ContractCodeCostInputs] extracted
 /// from the module when it was parsed.
 pub struct ParsedModule {
-    pub module: Module,
+    pub wasmi_module: wasmi::Module,
     pub wasmtime_module: wasmtime::Module,
     pub proto_version: u32,
     pub cost_inputs: VersionedContractCodeCostInputs,
 }
 
 impl ParsedModule {
-    pub fn new(
-        host: &Host,
-        engine: &Engine,
+    pub fn new<Ctx: AsBudget + ErrorHandler>(
+        context: &Ctx,
+        curr_ledger_protocol: u32,
+        wasmi_engine: &Engine,
         wasmtime_engine: &wasmtime::Engine,
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
     ) -> Result<Arc<Self>, HostError> {
-        cost_inputs.charge_for_parsing(host)?;
-        let (module, wasmtime_module, proto_version) =
-            Self::parse_wasm(host, engine, wasmtime_engine, wasm)?;
+        cost_inputs.charge_for_parsing(context.as_budget())?;
+        let (wasmi_module, wasmtime_module, proto_version) = Self::parse_wasm(
+            context,
+            curr_ledger_protocol,
+            wasmi_engine,
+            wasmtime_engine,
+            wasm,
+        )?;
         Ok(Arc::new(Self {
-            module,
+            wasmi_module,
             wasmtime_module,
             proto_version,
             cost_inputs,
@@ -178,8 +186,11 @@ impl ParsedModule {
         // we'll leave some future-proofing room here. The important point
         // is to not be introducing a DoS vector.
         const SYM_LEN_LIMIT: usize = 10;
+
+        #[cfg(feature = "wasmtime")]
+        #[allow(unused_variables)]
         let symbols: BTreeSet<(&str, &str)> = self
-            .module
+            .wasmtime_module
             .imports()
             .filter_map(|i| {
                 if i.ty().func().is_some() {
@@ -192,6 +203,23 @@ impl ParsedModule {
                 None
             })
             .collect();
+
+        #[cfg(feature = "wasmi")]
+        let symbols: BTreeSet<(&str, &str)> = self
+            .wasmi_module
+            .imports()
+            .filter_map(|i| {
+                if i.ty().func().is_some() {
+                    let mod_str = i.module();
+                    let fn_str = i.name();
+                    if mod_str.len() < SYM_LEN_LIMIT && fn_str.len() < SYM_LEN_LIMIT {
+                        return Some((mod_str, fn_str));
+                    }
+                }
+                None
+            })
+            .collect();
+
         // We approximate the cost of `BTreeSet` with the cost of initializng a
         // `Vec` with the same elements, and we are doing it after the set has
         // been created. The element count has been limited/charged during the
@@ -202,15 +230,19 @@ impl ParsedModule {
         callback(&symbols)
     }
 
-    pub fn make_linker(&self, host: &Host) -> Result<wasmi::Linker<Host>, HostError> {
+    pub fn make_wasmi_linker(&self, host: &Host) -> Result<wasmi::Linker<Host>, HostError> {
         self.with_import_symbols(host, |symbols| {
-            Host::make_minimal_wasmi_linker_for_symbols(self.module.engine(), symbols)
+            Host::make_minimal_wasmi_linker_for_symbols(host, self.wasmi_module.engine(), symbols)
         })
     }
 
     pub fn make_wasmtime_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
         self.with_import_symbols(host, |symbols| {
-            Host::make_minimal_wasmtime_linker_for_symbols(self.wasmtime_module.engine(), symbols)
+            Host::make_minimal_wasmtime_linker_for_symbols(
+                host,
+                self.wasmtime_module.engine(),
+                symbols,
+            )
         })
     }
 
@@ -220,54 +252,63 @@ impl ParsedModule {
         cost_inputs: VersionedContractCodeCostInputs,
     ) -> Result<Arc<Self>, HostError> {
         use crate::budget::AsBudget;
-        let config = crate::vm::get_wasmi_config(host.as_budget())?;
-        let engine = Engine::new(&config);
+        let wasmi_config = crate::vm::get_wasmi_config(host.as_budget())?;
+        let wasmi_engine = Engine::new(&wasmi_config);
 
         let wasmtime_config = get_wasmtime_config(host.as_budget())?;
         let wasmtime_engine = host.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
 
-        Self::new(host, &engine, &wasmtime_engine, wasm, cost_inputs)
+        Self::new(
+            host,
+            host.get_ledger_protocol_version()?,
+            &wasmi_engine,
+            &wasmtime_engine,
+            wasm,
+            cost_inputs,
+        )
     }
 
     /// Parse the Wasm blob into a [Module] and its protocol number, checking its interface version
-    fn parse_wasm(
-        host: &Host,
+    fn parse_wasm<Ctx: AsBudget + ErrorHandler>(
+        context: &Ctx,
+        curr_ledger_protocol: u32,
         engine: &Engine,
         wasmtime_engine: &wasmtime::Engine,
         wasm: &[u8],
     ) -> Result<(Module, wasmtime::Module, u32), HostError> {
         let module = {
             let _span0 = tracy_span!("parse_wasm (wasmi)");
-            host.map_err(Module::new(&engine, wasm))?
+            context.map_err(Module::new(&engine, wasm))?
         };
-        let wasmtime_module = host.map_wasmtime_error(
+        let wasmtime_module = context.map_wasmtime_error(
             populate_or_retrieve_cached_wasmtime_wasmtime_module(wasm, wasmtime_engine),
         )?;
 
-        Self::check_max_args(host, &module)?;
-        let interface_version = Self::check_meta_section(host, &module)?;
+        Self::check_max_args(context, &module)?;
+        let interface_version = Self::check_meta_section(context, curr_ledger_protocol, &module)?;
         let contract_proto = interface_version.protocol;
 
         Ok((module, wasmtime_module, contract_proto))
     }
 
-    fn check_contract_interface_version(
-        host: &Host,
+    fn check_contract_interface_version<Ctx: AsBudget + ErrorHandler>(
+        context: &Ctx,
+        curr_ledger_protocol: u32,
         interface_version: &ScEnvMetaEntryInterfaceVersion,
     ) -> Result<(), HostError> {
         let want_proto = {
-            let ledger_proto = host.get_ledger_protocol_version()?;
             let env_proto = meta::INTERFACE_VERSION.protocol;
-            if ledger_proto <= env_proto {
+            if curr_ledger_protocol <= env_proto {
                 // ledger proto should be before or equal to env proto
-                ledger_proto
+                curr_ledger_protocol
             } else {
-                return Err(err!(
-                    host,
-                    (ScErrorType::Context, ScErrorCode::InternalError),
+                return Err(context.error(
+                    (ScErrorType::Context, ScErrorCode::InternalError).into(),
                     "ledger protocol number is ahead of supported env protocol number",
-                    ledger_proto,
-                    env_proto
+                    &[
+                        Val::from_u32(curr_ledger_protocol).to_val(),
+                        Val::from_u32(env_proto).to_val(),
+                    ],
                 ));
             }
         };
@@ -289,11 +330,10 @@ impl ParsedModule {
             // stellar-core, so bypassing this check for "next" is safe.
             #[cfg(not(feature = "next"))]
             if got_pre != 0 {
-                return Err(err!(
-                    host,
-                    (ScErrorType::WasmVm, ScErrorCode::InvalidInput),
+                return Err(context.error(
+                    (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
                     "contract pre-release number for old protocol is nonzero",
-                    got_pre
+                    &[Val::from_u32(got_pre).to_val()],
                 ));
             }
         } else if got_proto == want_proto {
@@ -306,12 +346,13 @@ impl ParsedModule {
                 // allow it only if it matches the current prerelease exactly.
                 let want_pre = meta::INTERFACE_VERSION.pre_release;
                 if want_pre != got_pre {
-                    return Err(err!(
-                        host,
-                        (ScErrorType::WasmVm, ScErrorCode::InvalidInput),
+                    return Err(context.error(
+                        (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
                         "contract pre-release number for current protocol does not match host",
-                        got_pre,
-                        want_pre
+                        &[
+                            Val::from_u32(got_pre).to_val(),
+                            Val::from_u32(want_pre).to_val(),
+                        ],
                     ));
                 }
             }
@@ -322,11 +363,10 @@ impl ParsedModule {
             // that the "future" protocol semantics baked in to a contract
             // differ from the final semantics chosen by the network, so to be
             // conservative we avoid even allowing this.
-            return Err(err!(
-                host,
-                (ScErrorType::WasmVm, ScErrorCode::InvalidInput),
+            return Err(context.error(
+                (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
                 "contract protocol number is newer than host",
-                got_proto
+                &[Val::from_u32(got_proto).to_val()],
             ));
         }
         Ok(())
@@ -345,11 +385,12 @@ impl ParsedModule {
     /// Returns the raw bytes content of a named custom section from the Wasm
     /// module loaded into the [Vm], or `None` if no such custom section exists.
     pub fn custom_section(&self, name: impl AsRef<str>) -> Option<&[u8]> {
-        Self::module_custom_section(&self.module, name)
+        Self::module_custom_section(&self.wasmi_module, name)
     }
 
-    fn check_meta_section(
-        host: &Host,
+    fn check_meta_section<Ctx: AsBudget + ErrorHandler>(
+        context: &Ctx,
+        curr_ledger_protocol: u32,
         m: &Module,
     ) -> Result<ScEnvMetaEntryInterfaceVersion, HostError> {
         if let Some(env_meta) = Self::module_custom_section(m, meta::ENV_META_V0_SECTION_NAME) {
@@ -358,45 +399,41 @@ impl ParsedModule {
             let mut cursor = Limited::new(Cursor::new(env_meta), limits);
             if let Some(env_meta_entry) = ScEnvMetaEntry::read_xdr_iter(&mut cursor).next() {
                 let ScEnvMetaEntry::ScEnvMetaKindInterfaceVersion(v) =
-                    host.map_err(env_meta_entry)?;
-                Self::check_contract_interface_version(host, &v)?;
+                    context.map_err(env_meta_entry)?;
+                Self::check_contract_interface_version(context, curr_ledger_protocol, &v)?;
                 Ok(v)
             } else {
-                Err(host.err(
-                    ScErrorType::WasmVm,
-                    ScErrorCode::InvalidInput,
+                Err(context.error(
+                    (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
                     "contract missing environment interface version",
                     &[],
                 ))
             }
         } else {
-            Err(host.err(
-                ScErrorType::WasmVm,
-                ScErrorCode::InvalidInput,
+            Err(context.error(
+                (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
                 "contract missing metadata section",
                 &[],
             ))
         }
     }
 
-    fn check_max_args(host: &Host, m: &Module) -> Result<(), HostError> {
+    fn check_max_args<E: ErrorHandler>(handler: &E, m: &Module) -> Result<(), HostError> {
         for e in m.exports() {
             match e.ty() {
                 wasmi::ExternType::Func(f) => {
                     if f.results().len() > Vm::MAX_VM_ARGS {
-                        return Err(err!(
-                            host,
-                            (ScErrorType::WasmVm, ScErrorCode::InvalidInput),
+                        return Err(handler.error(
+                            (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
                             "Too many return values in Wasm export",
-                            f.results().len()
+                            &[Val::from_u32(f.results().len() as u32).to_val()],
                         ));
                     }
                     if f.params().len() > Vm::MAX_VM_ARGS {
-                        return Err(err!(
-                            host,
-                            (ScErrorType::WasmVm, ScErrorCode::InvalidInput),
+                        return Err(handler.error(
+                            (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
                             "Too many arguments Wasm export",
-                            f.params().len()
+                            &[Val::from_u32(f.params().len() as u32).to_val()],
                         ));
                     }
                 }

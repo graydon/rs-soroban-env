@@ -8,6 +8,8 @@ use crate::{
 
 use std::{cmp::Ordering, rc::Rc};
 
+use super::ErrorHandler;
+
 /// Helper type for host functions that receive a position and length pair and
 /// expect to operate on a VM. Pos and len are not validated and len may be a
 /// count of bytes, Vals or slices depending on the host function.

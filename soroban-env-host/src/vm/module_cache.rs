@@ -7,7 +7,7 @@ use crate::{
     budget::{get_wasmi_config, AsBudget, Budget},
     host::metered_clone::{MeteredClone, MeteredContainer},
     xdr::{Hash, ScErrorCode, ScErrorType},
-    Host, HostError, MeteredOrdMap,
+    ErrorHandler, Host, HostError, MeteredOrdMap,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -130,17 +130,18 @@ impl ModuleCache {
         Ok(cache)
     }
 
-    pub fn new_reusable(host: &Host) -> Result<Self, HostError> {
-        let wasmi_config = get_wasmi_config(host.as_budget())?;
+    pub fn new_reusable<Ctx: AsBudget + ErrorHandler>(context: &Ctx) -> Result<Self, HostError> {
+        let wasmi_config = get_wasmi_config(context.as_budget())?;
         let wasmi_engine = wasmi::Engine::new(&wasmi_config);
 
-        let wasmtime_config = get_wasmtime_config(host.as_budget())?;
-        let wasmtime_engine = host.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
+        let wasmtime_config = get_wasmtime_config(context.as_budget())?;
+        let wasmtime_engine =
+            context.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
 
         let modules = ModuleCacheMap::UnmeteredReusableMap(Arc::new(Mutex::new(BTreeMap::new())));
 
-        let wasmi_linker = Host::make_maximal_wasmi_linker(&wasmi_engine)?;
-        let wasmtime_linker = Host::make_maximal_wasmtime_linker(&wasmtime_engine)?;
+        let wasmi_linker = Host::make_maximal_wasmi_linker(context, &wasmi_engine)?;
+        let wasmtime_linker = Host::make_maximal_wasmtime_linker(context, &wasmtime_engine)?;
 
         Ok(Self {
             wasmi_engine,
@@ -196,7 +197,13 @@ impl ModuleCache {
                                 v1.cost_inputs.metered_clone(host.as_budget())?,
                             ),
                         };
-                        self.parse_and_cache_module(host, hash, code, code_cost_inputs)?;
+                        self.parse_and_cache_module(
+                            host,
+                            host.get_ledger_protocol_version()?,
+                            hash,
+                            code,
+                            code_cost_inputs,
+                        )?;
                     }
                 }
             }
@@ -204,17 +211,19 @@ impl ModuleCache {
         Ok(())
     }
 
-    pub fn parse_and_cache_module_simple(
+    pub fn parse_and_cache_module_simple<Ctx: AsBudget + ErrorHandler>(
         &mut self,
-        host: &Host,
+        context: &Ctx,
+        curr_ledger_protocol: u32,
         wasm: &[u8],
     ) -> Result<(), HostError> {
         let contract_id = Hash(crate::crypto::sha256_hash_from_bytes_raw(
             wasm,
-            host.as_budget(),
+            context.as_budget(),
         )?);
         self.parse_and_cache_module(
-            host,
+            context,
+            curr_ledger_protocol,
             &contract_id,
             wasm,
             VersionedContractCodeCostInputs::V0 {
@@ -223,36 +232,43 @@ impl ModuleCache {
         )
     }
 
-    pub fn parse_and_cache_module(
+    pub fn parse_and_cache_module<Ctx: AsBudget + ErrorHandler>(
         &mut self,
-        host: &Host,
+        context: &Ctx,
+        curr_ledger_protocol: u32,
         contract_id: &Hash,
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
     ) -> Result<(), HostError> {
-        if self.modules.contains_key(contract_id, host.as_budget())? {
+        if self
+            .modules
+            .contains_key(contract_id, context.as_budget())?
+        {
             if self.modules.is_reusable() {
                 return Ok(());
             } else {
-                return Err(host.err(
-                    ScErrorType::Context,
-                    ScErrorCode::InternalError,
+                return Err(context.error(
+                    crate::Error::from_type_and_code(
+                        ScErrorType::Context,
+                        ScErrorCode::InternalError,
+                    ),
                     "module cache already contains contract",
                     &[],
                 ));
             }
         }
         let parsed_module = ParsedModule::new(
-            host,
+            context,
+            curr_ledger_protocol,
             &self.wasmi_engine,
             &self.wasmtime_engine,
             &wasm,
             cost_inputs,
         )?;
         self.modules.insert(
-            contract_id.metered_clone(host)?,
+            contract_id.metered_clone(context.as_budget())?,
             parsed_module,
-            host.as_budget(),
+            context.as_budget(),
         )?;
         Ok(())
     }
@@ -298,7 +314,7 @@ impl ModuleCache {
         host: &Host,
     ) -> Result<wasmi::Linker<Host>, HostError> {
         self.with_minimal_import_symbols(host, |symbols| {
-            Host::make_minimal_wasmi_linker_for_symbols(&self.wasmi_engine, symbols)
+            Host::make_minimal_wasmi_linker_for_symbols(host, &self.wasmi_engine, symbols)
         })
     }
 
@@ -307,20 +323,24 @@ impl ModuleCache {
         host: &Host,
     ) -> Result<wasmtime::Linker<Host>, HostError> {
         self.with_minimal_import_symbols(host, |symbols| {
-            Host::make_minimal_wasmtime_linker_for_symbols(&self.wasmtime_engine, symbols)
+            Host::make_minimal_wasmtime_linker_for_symbols(host, &self.wasmtime_engine, symbols)
         })
     }
 
-    pub fn contains_module(&self, wasm_hash: &Hash, host: &Host) -> Result<bool, HostError> {
-        Ok(self.modules.contains_key(wasm_hash, host.as_budget())?)
+    pub fn contains_module<Ctx: AsBudget + ErrorHandler>(
+        &self,
+        wasm_hash: &Hash,
+        context: &Ctx,
+    ) -> Result<bool, HostError> {
+        Ok(self.modules.contains_key(wasm_hash, context.as_budget())?)
     }
 
-    pub fn get_module(
+    pub fn get_module<Ctx: AsBudget + ErrorHandler>(
         &self,
-        host: &Host,
+        context: &Ctx,
         wasm_hash: &Hash,
     ) -> Result<Option<Arc<ParsedModule>>, HostError> {
-        if let Some(m) = self.modules.get(wasm_hash, host.as_budget())? {
+        if let Some(m) = self.modules.get(wasm_hash, context.as_budget())? {
             Ok(Some(m.clone()))
         } else {
             Ok(None)

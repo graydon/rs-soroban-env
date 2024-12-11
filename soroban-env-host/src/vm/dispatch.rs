@@ -1,7 +1,7 @@
 use super::FuelRefillable;
 use crate::{
     xdr::{ContractCostType, ScErrorCode, ScErrorType},
-    CheckedEnvArg, EnvBase, Host, HostError, VmCaller, VmCallerEnv,
+    CheckedEnvArg, EnvBase, ErrorHandler, Host, HostError, VmCaller, VmCallerEnv,
 };
 use crate::{
     AddressObject, Bool, BytesObject, DurationObject, Error, I128Object, I256Object, I256Val,

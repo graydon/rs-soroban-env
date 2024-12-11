@@ -166,7 +166,8 @@ use crate::{
         LedgerEntryExt, ScAddress, ScErrorCode, ScErrorType, ScNonceKey, ScVal,
         SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanCredentials,
     },
-    AddressObject, Compare, Host, HostError, Symbol, TryFromVal, TryIntoVal, Val, VecObject,
+    AddressObject, Compare, ErrorHandler, Host, HostError, Symbol, TryFromVal, TryIntoVal, Val,
+    VecObject,
 };
 
 use super::xdr;

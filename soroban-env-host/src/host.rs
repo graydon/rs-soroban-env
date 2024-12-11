@@ -41,7 +41,7 @@ pub(crate) mod prng;
 pub(crate) mod trace;
 mod validity;
 
-pub use error::HostError;
+pub use error::{ErrorHandler, HostError};
 use frame::CallParams;
 pub use prng::{Seed, SEED_BYTES};
 pub use trace::{TraceEvent, TraceHook, TraceRecord, TraceState};

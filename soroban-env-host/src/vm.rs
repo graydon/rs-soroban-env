@@ -28,7 +28,8 @@ use crate::{
         metered_hash::{CountingHasher, MeteredHash},
     },
     xdr::{ContractCostType, Hash, ScErrorCode, ScErrorType},
-    ConversionError, Host, HostError, Symbol, SymbolStr, TryIntoVal, Val, WasmiMarshal,
+    ConversionError, ErrorHandler, Host, HostError, Symbol, SymbolStr, TryIntoVal, Val,
+    WasmiMarshal,
 };
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::Arc};
 
@@ -106,52 +107,56 @@ impl std::hash::Hash for Vm {
 impl Host {
     // Make a wasmi linker restricted to _only_ importing the symbols
     // mentioned in `symbols`.
-    pub(crate) fn make_minimal_wasmi_linker_for_symbols(
+    pub(crate) fn make_minimal_wasmi_linker_for_symbols<Ctx: ErrorHandler>(
+        context: &Ctx,
         engine: &wasmi::Engine,
         symbols: &BTreeSet<(&str, &str)>,
     ) -> Result<wasmi::Linker<Host>, HostError> {
         let mut linker = wasmi::Linker::new(&engine);
         for hf in HOST_FUNCTIONS {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
-                (hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le))?;
+                context.map_err((hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le)))?;
             }
         }
         Ok(linker)
     }
 
     // Make a wasmi linker that imports all the symbols.
-    pub(crate) fn make_maximal_wasmi_linker(
+    pub(crate) fn make_maximal_wasmi_linker<Ctx: ErrorHandler>(
+        context: &Ctx,
         engine: &wasmi::Engine,
     ) -> Result<wasmi::Linker<Host>, HostError> {
         let mut linker = wasmi::Linker::new(&engine);
         for hf in HOST_FUNCTIONS {
-            (hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le))?;
+            context.map_err((hf.wrap)(&mut linker).map_err(|le| wasmi::Error::Linker(le)))?;
         }
         Ok(linker)
     }
 
     // Make a wasmtime linker restricted to _only_ importing the symbols
     // mentioned in `symbols`.
-    pub(crate) fn make_minimal_wasmtime_linker_for_symbols(
+    pub(crate) fn make_minimal_wasmtime_linker_for_symbols<Ctx: ErrorHandler>(
+        context: &Ctx,
         engine: &wasmtime::Engine,
         symbols: &BTreeSet<(&str, &str)>,
     ) -> Result<wasmtime::Linker<Host>, HostError> {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
-                HostError::map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
+                context.map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
             }
         }
         Ok(linker)
     }
 
     // Make a wasmtime linker that imports all the symbols.
-    pub(crate) fn make_maximal_wasmtime_linker(
+    pub(crate) fn make_maximal_wasmtime_linker<Ctx: ErrorHandler>(
+        context: &Ctx,
         engine: &wasmtime::Engine,
     ) -> Result<wasmtime::Linker<Host>, HostError> {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
-            HostError::map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
+            context.map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
         }
         Ok(linker)
     }
@@ -208,9 +213,9 @@ impl Vm {
 
         let _wasmi_part = tracy_span!("Vm::instantiate - wasmi part");
 
-        let engine = parsed_module.module.engine();
+        let wasmi_engine = parsed_module.wasmi_module.engine();
         let _wasmi_store = tracy_span!("Vm::instantiate - wasmi store");
-        let mut store = Store::new(engine, host.clone());
+        let mut store = Store::new(wasmi_engine, host.clone());
         #[cfg(feature = "tracy")]
         std::mem::drop(_wasmi_store);
 
@@ -269,7 +274,7 @@ impl Vm {
 
         let not_started_instance = {
             let _span0 = tracy_span!("Vm::Instantiate - wasmi instantiate");
-            host.map_err(linker.instantiate(&mut store, &parsed_module.module))?
+            host.map_err(linker.instantiate(&mut store, &parsed_module.wasmi_module))?
         };
 
         let instance = host.map_err(
@@ -342,7 +347,7 @@ impl Vm {
                 &cache.wasmtime_linker,
             )
         } else {
-            let linker = parsed_module.make_linker(host)?;
+            let linker = parsed_module.make_wasmi_linker(host)?;
             let wasmtime_linker = parsed_module.make_wasmtime_linker(host)?;
             Self::instantiate(host, contract_id, parsed_module, &linker, &wasmtime_linker)
         }
@@ -391,7 +396,7 @@ impl Vm {
         let _span = tracy_span!("Vm::new");
         VmInstantiationTimer::new(host.clone());
         let parsed_module = Self::parse_module(host, wasm, cost_inputs, cost_mode)?;
-        let linker = parsed_module.make_linker(host)?;
+        let linker = parsed_module.make_wasmi_linker(host)?;
         let wasmtime_linker = parsed_module.make_wasmtime_linker(host)?;
         Self::instantiate(host, contract_id, parsed_module, &linker, &wasmtime_linker)
     }
