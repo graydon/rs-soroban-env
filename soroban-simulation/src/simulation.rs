@@ -7,6 +7,7 @@ use crate::snapshot_source::{
     SimulationSnapshotSource, SimulationSnapshotSourceWithArchive, SnapshotSourceWithArchive,
 };
 use anyhow::Result;
+use soroban_env_host::xdr::SorobanTransactionDataExt;
 use soroban_env_host::{
     e2e_invoke::invoke_host_function_in_recording_mode,
     e2e_invoke::LedgerEntryChange,
@@ -337,7 +338,7 @@ fn create_transaction_data(
     SorobanTransactionData {
         resources,
         resource_fee,
-        ext: ExtensionPoint::V0,
+        ext: SorobanTransactionDataExt::V0,
     }
 }
 

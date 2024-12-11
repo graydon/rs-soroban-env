@@ -9,11 +9,7 @@ use soroban_env_host::e2e_testutils::{
 use soroban_env_host::fees::{FeeConfiguration, RentFeeConfiguration};
 use soroban_env_host::storage::SnapshotSource;
 use soroban_env_host::xdr::{
-    AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
-    AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountEntryExtensionV3, ExtensionPoint,
-    LedgerEntryData, LedgerFootprint, Liabilities, SequenceNumber, Signer, SignerKey,
-    SorobanResources, SorobanTransactionData, SponsorshipDescriptor, Thresholds, TimePoint,
-    Uint256,
+    AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext, AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountEntryExtensionV3, ExtensionPoint, LedgerEntryData, LedgerFootprint, Liabilities, SequenceNumber, Signer, SignerKey, SorobanResources, SorobanTransactionData, SorobanTransactionDataExt, SponsorshipDescriptor, Thresholds, TimePoint, Uint256
 };
 use soroban_env_host::LedgerInfo;
 use std::rc::Rc;
@@ -156,7 +152,7 @@ fn test_automatic_restoration() {
             .unwrap(),
         Some(RestoreOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: Default::default(),

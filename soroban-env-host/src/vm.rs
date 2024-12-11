@@ -402,7 +402,7 @@ impl Vm {
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
         _cost_mode: ModuleParseCostMode,
-    ) -> Result<Rc<ParsedModule>, HostError> {
+    ) -> Result<Arc<ParsedModule>, HostError> {
         ParsedModule::new_with_isolated_engine(host, wasm, cost_inputs)
     }
 

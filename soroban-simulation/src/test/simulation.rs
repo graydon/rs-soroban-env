@@ -18,7 +18,7 @@ use soroban_env_host::xdr::{
     ContractDataEntry, ExtensionPoint, LedgerEntry, LedgerEntryData, LedgerFootprint, LedgerKey,
     LedgerKeyContractData, ScAddress, ScErrorCode, ScErrorType, ScNonceKey, ScVal,
     SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanCredentials, SorobanResources,
-    SorobanTransactionData,
+    SorobanTransactionData, SorobanTransactionDataExt,
 };
 use soroban_env_host::HostError;
 use soroban_test_wasms::{ADD_I32, AUTH_TEST_CONTRACT};
@@ -131,7 +131,7 @@ fn test_simulate_upload_wasm() {
     assert_eq!(
         res.transaction_data,
         Some(SorobanTransactionData {
-            ext: ExtensionPoint::V0,
+            ext: SorobanTransactionDataExt::V0,
             resources: SorobanResources {
                 footprint: LedgerFootprint {
                     read_only: Default::default(),
@@ -185,7 +185,7 @@ fn test_simulate_upload_wasm() {
     assert_eq!(
         res_with_adjustments.transaction_data,
         Some(SorobanTransactionData {
-            ext: ExtensionPoint::V0,
+            ext: SorobanTransactionDataExt::V0,
             resources: SorobanResources {
                 footprint: LedgerFootprint {
                     read_only: Default::default(),
@@ -318,7 +318,7 @@ fn test_simulate_create_contract() {
     assert_eq!(
         res.transaction_data,
         Some(SorobanTransactionData {
-            ext: ExtensionPoint::V0,
+            ext: SorobanTransactionDataExt::V0,
             resources: SorobanResources {
                 footprint: LedgerFootprint {
                     read_only: vec![contract.wasm_key.clone()].try_into().unwrap(),
@@ -464,7 +464,7 @@ fn test_simulate_invoke_contract_with_auth() {
     assert_eq!(
         res.transaction_data,
         Some(SorobanTransactionData {
-            ext: ExtensionPoint::V0,
+            ext: SorobanTransactionDataExt::V0,
             resources: SorobanResources {
                 footprint: LedgerFootprint {
                     read_only: vec![
@@ -552,7 +552,7 @@ fn test_simulate_extend_ttl_op() {
         no_op_extension,
         ExtendTtlOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: Default::default(),
@@ -581,7 +581,7 @@ fn test_simulate_extend_ttl_op() {
         extension_for_some_entries,
         ExtendTtlOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: vec![
@@ -618,7 +618,7 @@ fn test_simulate_extend_ttl_op() {
         extension_for_all_entries,
         ExtendTtlOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: keys.clone().tap_mut(|v| v.sort()).try_into().unwrap(),
@@ -663,7 +663,7 @@ fn test_simulate_extend_ttl_op() {
         extension_for_all_entries_with_adjustment,
         ExtendTtlOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: extension_for_all_entries
                         .transaction_data
@@ -719,7 +719,7 @@ fn test_simulate_restore_op() {
         no_op_restoration,
         RestoreOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: Default::default(),
@@ -749,7 +749,7 @@ fn test_simulate_restore_op() {
         restoration_for_some_entries,
         RestoreOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: Default::default(),
@@ -781,7 +781,7 @@ fn test_simulate_restore_op() {
         extension_for_all_entries,
         RestoreOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: Default::default(),
@@ -809,7 +809,7 @@ fn test_simulate_restore_op() {
         extension_for_all_entries_with_adjustment,
         RestoreOpSimulationResult {
             transaction_data: SorobanTransactionData {
-                ext: ExtensionPoint::V0,
+                ext: SorobanTransactionDataExt::V0,
                 resources: SorobanResources {
                     footprint: LedgerFootprint {
                         read_only: Default::default(),
