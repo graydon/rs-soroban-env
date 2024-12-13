@@ -166,7 +166,7 @@ use crate::{
         LedgerEntryExt, ScAddress, ScErrorCode, ScErrorType, ScNonceKey, ScVal,
         SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanCredentials,
     },
-    AddressObject, Compare, ErrorHandler, Host, HostError, Symbol, TryFromVal, TryIntoVal, Val,
+    AddressObject, Compare, Host, HostError, Symbol, TryFromVal, TryIntoVal, Val,
     VecObject,
 };
 
@@ -2283,6 +2283,7 @@ impl Host {
             CallParams::default_internal_call(),
         );
         if let Err(e) = &res {
+            use crate::ErrorHandler;
             self.error(
                 e.error,
                 "check auth invocation for a custom account contract failed",

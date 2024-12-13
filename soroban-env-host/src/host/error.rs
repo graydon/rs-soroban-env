@@ -270,7 +270,6 @@ pub trait ErrorHandler {
     where
         Error: From<E>,
         E: Debug;
-
     #[cfg(feature = "wasmtime")]
     fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError>;
     fn error(&self, error: Error, msg: &str, args: &[Val]) -> HostError;
@@ -317,6 +316,7 @@ impl ErrorHandler for Host {
     // HostError or a wasmtime::Trap, or "something else entirely" since it's a
     // dyn Error type. This is a somewhat different pattern to what we have in
     // wasmi.
+    #[cfg(feature = "wasmtime")]
     fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
         match r {
             Ok(t) => Ok(t),
