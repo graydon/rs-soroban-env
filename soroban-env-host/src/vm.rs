@@ -37,7 +37,7 @@ use fuel_refillable::FuelRefillable;
 use func_info::HOST_FUNCTIONS;
 
 pub use module_cache::ModuleCache;
-pub use parsed_module::{ParsedModule, VersionedContractCodeCostInputs};
+pub use parsed_module::{ParsedModule, CompilationContext, VersionedContractCodeCostInputs};
 
 use wasmi::{Instance, Linker, Memory, Store, Value};
 

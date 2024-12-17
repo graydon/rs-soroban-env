@@ -33,7 +33,7 @@ pub(crate) mod host_object;
 
 pub mod auth;
 pub mod vm;
-pub use vm::ModuleCache;
+pub use vm::{ModuleCache,CompilationContext};
 pub use vm::Vm;
 pub mod storage;
 pub use budget::{DEFAULT_HOST_DEPTH_LIMIT, DEFAULT_XDR_RW_LIMITS};

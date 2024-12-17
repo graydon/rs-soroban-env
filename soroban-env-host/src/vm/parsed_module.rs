@@ -141,6 +141,34 @@ impl VersionedContractCodeCostInputs {
     }
 }
 
+// A `CompilationContext` abstracts over the necessary budgeting and
+// error-reporting dimensions of both the `Host` (when building a
+// contract for throwaway use in an isolated context like contract-upload)
+// and other contexts that might want to compile code (like embedders that
+// precompile contracts). It also provides the ability of a caller to
+// save compiled modules on disk, for reuse in future cache accesses, if
+// that functionality is desired. By default, saving and restoring is
+// not enabled.
+pub trait CompilationContext: AsBudget + ErrorHandler {
+    fn load_compiled_module(
+        &self,
+        _cache_validity_hash: &crate::xdr::Hash,
+        _contract_hash: &crate::xdr::Hash,
+    ) -> Result<Option<Vec<u8>>, HostError> {
+        Ok(None)
+    }
+    fn save_compiled_module(
+        &self,
+        _cache_validity_hash: &crate::xdr::Hash,
+        _contract_hash: &crate::xdr::Hash,
+        _compiled_module: Vec<u8>,
+    ) -> Result<(), HostError> {
+        Ok(())
+    }
+}
+
+impl CompilationContext for Host {}
+
 /// A [ParsedModule] contains the parsed [wasmi::Module] for a given Wasm blob,
 /// as well as a protocol number and set of [ContractCodeCostInputs] extracted
 /// from the module when it was parsed.
@@ -152,7 +180,7 @@ pub struct ParsedModule {
 }
 
 impl ParsedModule {
-    pub fn new<Ctx: AsBudget + ErrorHandler>(
+    pub fn new<Ctx: CompilationContext>(
         context: &Ctx,
         curr_ledger_protocol: u32,
         wasmi_engine: &Engine,
@@ -269,7 +297,7 @@ impl ParsedModule {
     }
 
     /// Parse the Wasm blob into a [Module] and its protocol number, checking its interface version
-    fn parse_wasm<Ctx: AsBudget + ErrorHandler>(
+    fn parse_wasm<Ctx: CompilationContext>(
         context: &Ctx,
         curr_ledger_protocol: u32,
         engine: &Engine,
@@ -291,7 +319,7 @@ impl ParsedModule {
         Ok((module, wasmtime_module, contract_proto))
     }
 
-    fn check_contract_interface_version<Ctx: AsBudget + ErrorHandler>(
+    fn check_contract_interface_version<Ctx: CompilationContext>(
         context: &Ctx,
         curr_ledger_protocol: u32,
         interface_version: &ScEnvMetaEntryInterfaceVersion,
@@ -388,7 +416,7 @@ impl ParsedModule {
         Self::module_custom_section(&self.wasmi_module, name)
     }
 
-    fn check_meta_section<Ctx: AsBudget + ErrorHandler>(
+    fn check_meta_section<Ctx: CompilationContext>(
         context: &Ctx,
         curr_ledger_protocol: u32,
         m: &Module,

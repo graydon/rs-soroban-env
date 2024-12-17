@@ -1,7 +1,7 @@
 use super::{
     func_info::HOST_FUNCTIONS,
     get_wasmtime_config,
-    parsed_module::{ParsedModule, VersionedContractCodeCostInputs},
+    parsed_module::{ParsedModule, CompilationContext, VersionedContractCodeCostInputs},
 };
 use crate::{
     budget::{get_wasmi_config, AsBudget, Budget},
@@ -130,7 +130,7 @@ impl ModuleCache {
         Ok(cache)
     }
 
-    pub fn new_reusable<Ctx: AsBudget + ErrorHandler>(context: &Ctx) -> Result<Self, HostError> {
+    pub fn new_reusable<Ctx: CompilationContext>(context: &Ctx) -> Result<Self, HostError> {
         let wasmi_config = get_wasmi_config(context.as_budget())?;
         let wasmi_engine = wasmi::Engine::new(&wasmi_config);
 
@@ -211,7 +211,7 @@ impl ModuleCache {
         Ok(())
     }
 
-    pub fn parse_and_cache_module_simple<Ctx: AsBudget + ErrorHandler>(
+    pub fn parse_and_cache_module_simple<Ctx: CompilationContext>(
         &mut self,
         context: &Ctx,
         curr_ledger_protocol: u32,
@@ -232,7 +232,7 @@ impl ModuleCache {
         )
     }
 
-    pub fn parse_and_cache_module<Ctx: AsBudget + ErrorHandler>(
+    pub fn parse_and_cache_module<Ctx: CompilationContext>(
         &mut self,
         context: &Ctx,
         curr_ledger_protocol: u32,
@@ -327,7 +327,7 @@ impl ModuleCache {
         })
     }
 
-    pub fn contains_module<Ctx: AsBudget + ErrorHandler>(
+    pub fn contains_module<Ctx: CompilationContext>(
         &self,
         wasm_hash: &Hash,
         context: &Ctx,
@@ -335,7 +335,7 @@ impl ModuleCache {
         Ok(self.modules.contains_key(wasm_hash, context.as_budget())?)
     }
 
-    pub fn get_module<Ctx: AsBudget + ErrorHandler>(
+    pub fn get_module<Ctx: CompilationContext>(
         &self,
         context: &Ctx,
         wasm_hash: &Hash,
