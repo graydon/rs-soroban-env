@@ -165,6 +165,57 @@ impl HostError {
 
         true
     }
+
+    #[cfg(feature = "wasmtime")]
+    fn extract_wasmtime_error(e: &wasmtime::Error, debug_fn: impl FnOnce(&dyn Debug)) -> HostError
+    {
+        // try searching the chain for something we recognize
+        for source in e.chain() {
+            if let Some(he) = source.downcast_ref::<HostError>() {
+                return he.clone();
+            }
+            if let Some(trap) = source.downcast_ref::<wasmtime::Trap>() {
+                debug_fn(&trap);
+                return HostError::from(trap.clone());
+            }
+            if let Some(bre) = source.downcast_ref::<wasmtime::wasmparser::BinaryReaderError>() {
+                debug_fn(&bre);
+                return HostError::from(bre.clone());
+            }
+            if let Some(ce) = source.downcast_ref::<wasmtime_environ::CompileError>() {
+                debug_fn(&ce);
+                return HostError::from(Error::from_type_and_code(
+                    ScErrorType::WasmVm,
+                    ScErrorCode::InvalidInput,
+                ));
+            }
+            // Oh I do not like this part:
+            let s = source.to_string();
+            if s.contains("types incompatible") {
+                debug_fn(&source);
+                return HostError::from(Error::from_type_and_code(
+                    ScErrorType::WasmVm,
+                    ScErrorCode::UnexpectedType,
+                ));
+            }
+        }
+        return HostError::from(Error::from_type_and_code(
+            ScErrorType::WasmVm,
+            ScErrorCode::InvalidAction,
+        ));
+    }
+
+    // Wasmtime uses anyhow::Error for its error type which may carry either a
+    // HostError or a wasmtime::Trap, or "something else entirely" since it's a
+    // dyn Error type. This is a somewhat different pattern to what we have in
+    // wasmi.
+    #[cfg(feature = "wasmtime")]
+    pub fn map_wasmtime_error<T>(r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
+        match r {
+            Ok(t) => Ok(t),
+            Err(e) => Err(Self::extract_wasmtime_error(&e, |_| ())),
+        }
+    }
 }
 
 impl<T> From<T> for HostError
@@ -234,6 +285,8 @@ pub trait ErrorHandler {
     where
         Error: From<E>,
         E: Debug;
+    #[cfg(feature = "wasmtime")]
+    fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError>;
     fn error(&self, error: Error, msg: &str, args: &[Val]) -> HostError;
 }
 
@@ -271,6 +324,28 @@ impl ErrorHandler for Host {
                 Ok(())
             });
             self.error(e.into(), &msg, &[])
+        })
+    }
+
+    // Wasmtime uses anyhow::Error for its error type which may carry either a
+    // HostError or a wasmtime::Trap, or "something else entirely" since it's a
+    // dyn Error type. This is a somewhat different pattern to what we have in
+    // wasmi.
+    #[cfg(feature = "wasmtime")]
+    fn map_wasmtime_error<T>(&self, res: Result<T, wasmtime::Error>) -> Result<T, HostError> {
+        res.map_err(|e| {
+            use std::borrow::Cow;
+            let mut msg: Cow<'_, str> = Cow::Borrowed(&"");
+            // This observes the debug state, but it only causes a different
+            // (richer) string to be logged as a diagnostic event, which
+            // is itself not observable outside the debug state.
+            let he = HostError::extract_wasmtime_error(&e, |d| {
+                self.with_debug_mode(|| {
+                    msg = Cow::Owned(format!("{:?}", d));
+                    Ok(())
+                })
+            });
+            self.error(he.error, &msg, &[])
         })
     }
 

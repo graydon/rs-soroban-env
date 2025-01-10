@@ -694,8 +694,11 @@ impl Host {
             match res {
                 Ok(res) => res,
                 Err(panic_payload) => {
+                    #[cfg(all(feature = "wasmi", not(feature = "wasmtime")))]
                     let mut error: Error =
                         Error::from(wasmi::core::TrapCode::UnreachableCodeReached);
+                    #[cfg(feature = "wasmtime")]
+                    let mut error: Error = Error::from(wasmtime::Trap::UnreachableCodeReached);
 
                     let mut recovered_error_from_panic_refcell = false;
                     if let Ok(panic) = panic.try_borrow() {
@@ -793,12 +796,7 @@ impl Host {
             let wasm_key = self.contract_code_ledger_key(wasm_hash)?;
             if self.try_borrow_storage_mut()?.has(&wasm_key, self, None)? {
                 if let Some(parsed_module) = cache.get_module(wasm_hash)? {
-                    return Vm::from_parsed_module_and_wasmi_linker(
-                        self,
-                        contract_id,
-                        parsed_module,
-                        &cache.wasmi_linker,
-                    );
+                    return Vm::from_parsed_module(self, contract_id, parsed_module);
                 }
             }
         };
@@ -857,42 +855,33 @@ impl Host {
         //     - If the module is _not expired_ we assume it'll be survive until
         //       execution, simulate a hit, and risk undercharging.
         if self.in_storage_recording_mode()? {
-            if let Some((parsed_module, wasmi_linker)) =
-                self.budget_ref().with_observable_shadow_mode(|| {
-                    use crate::vm::ParsedModule;
-                    let wasm_key = self.contract_code_ledger_key(wasm_hash)?;
-                    let is_key_live_in_snapshot = self
-                        .try_borrow_storage_mut()?
-                        .is_key_live_in_snapshot(self, &wasm_key)?;
-                    if is_key_live_in_snapshot {
-                        let (code, _costs) = self.retrieve_wasm_from_storage(&wasm_hash)?;
-                        // Currently only v0 costs are used by the inter-ledger
-                        // module cache. Note, that when key is not in the live
-                        // snapshot, the inter-ledger cache won't be used
-                        // either, so we'll end up in the "cache miss" case
-                        // below and then correctly charge the instantiation
-                        // costs in `Vm::new_with_cost_inputs`.
-                        let costs_v0 = crate::vm::VersionedContractCodeCostInputs::V0 {
-                            wasm_bytes: code.len(),
-                        };
-                        let parsed_module = ParsedModule::new_with_isolated_engine(
-                            self,
-                            code.as_slice(),
-                            costs_v0,
-                        )?;
-                        let wasmi_linker = parsed_module.make_wasmi_linker(self)?;
-                        Ok(Some((parsed_module, wasmi_linker)))
-                    } else {
-                        Ok(None)
-                    }
-                })?
-            {
-                return Vm::from_parsed_module_and_wasmi_linker(
-                    self,
-                    contract_id,
-                    parsed_module,
-                    &wasmi_linker,
-                );
+            if let Some(parsed_module) = self.budget_ref().with_observable_shadow_mode(|| {
+                use crate::vm::ParsedModule;
+                let wasm_key = self.contract_code_ledger_key(wasm_hash)?;
+                let is_key_live_in_snapshot = self
+                    .try_borrow_storage_mut()?
+                    .is_key_live_in_snapshot(self, &wasm_key)?;
+                if is_key_live_in_snapshot {
+                    let (code, _costs) = self.retrieve_wasm_from_storage(&wasm_hash)?;
+                    // Currently only v0 costs are used by the inter-ledger
+                    // module cache. Note, that when key is not in the live
+                    // snapshot, the inter-ledger cache won't be used
+                    // either, so we'll end up in the "cache miss" case
+                    // below and then correctly charge the instantiation
+                    // costs in `Vm::new_with_cost_inputs`.
+                    let costs_v0 = crate::vm::VersionedContractCodeCostInputs::V0 {
+                        wasm_bytes: code.len(),
+                    };
+
+                    let parsed_module =
+                        ParsedModule::new_with_isolated_engine(self, code.as_slice(), costs_v0)?;
+
+                    Ok(Some(parsed_module))
+                } else {
+                    Ok(None)
+                }
+            })? {
+                return Vm::from_parsed_module(self, contract_id, parsed_module);
             }
         }
 
@@ -1065,8 +1054,12 @@ impl Host {
                             // trap-unreachable code). It's a little weird
                             // because we're not actually running a VM, but we
                             // prioritize emulation fidelity over honesty here.
+                            #[cfg(all(feature = "wasmi", not(feature = "wasmtime")))]
                             let mut error: Error =
                                 Error::from(wasmi::core::TrapCode::UnreachableCodeReached);
+                            #[cfg(feature = "wasmtime")]
+                            let mut error: Error =
+                                Error::from(wasmtime::Trap::UnreachableCodeReached);
 
                             let mut recovered_error_from_panic_refcell = false;
                             if let Ok(panic) = panic.try_borrow() {

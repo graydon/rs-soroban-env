@@ -117,9 +117,14 @@ fn test_vm_fuel_metering() -> Result<(), HostError> {
             budget.get_wasm_mem_alloc()?,
         ))
     })?;
+
     assert_eq!(
         (cpu_count, cpu_consumed, wasm_mem_alloc, mem_consumed),
-        (4005, 24030, 65536, 73734)
+        if host.is_wasmtime()? {
+            (4003, 24018, 65536, 73742)
+        } else {
+            (4005, 24030, 65536, 73734)
+        }
     );
 
     // giving it the exact required amount will succeed

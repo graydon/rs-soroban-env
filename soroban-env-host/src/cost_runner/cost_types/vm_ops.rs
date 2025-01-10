@@ -86,6 +86,7 @@ mod v21 {
                             host.get_ledger_protocol_version()
                                 .expect("protocol version"),
                             sample.module.wasmi_module.engine(),
+                            sample.module.wasmtime_module.engine(),
                             &sample.wasm[..],
                             sample.module.cost_inputs.clone(),
                         )
@@ -123,7 +124,7 @@ mod v21 {
                     sample: Self::SampleType,
                 ) -> Self::RecycledType {
                     let vm = black_box(
-                        Vm::from_parsed_module_and_wasmi_linker(
+                        Vm::from_parsed_module(
                             host,
                             sample.id.unwrap(),
                             sample.module,

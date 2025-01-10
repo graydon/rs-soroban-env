@@ -10,7 +10,7 @@ use crate::{
     ErrorHandler, Host, HostError, Val, DEFAULT_XDR_RW_LIMITS,
 };
 
-use super::{Vm, HOST_FUNCTIONS};
+use super::{SendHost, Vm, HOST_FUNCTIONS};
 use std::{collections::BTreeSet, io::Cursor, sync::Arc};
 
 #[derive(Debug, Clone)]
@@ -148,7 +148,10 @@ impl CompilationContext for Host {}
 /// as well as a protocol number and set of [ContractCodeCostInputs] extracted
 /// from the module when it was parsed.
 pub struct ParsedModule {
+    #[cfg(feature = "wasmi")]
     pub wasmi_module: wasmi::Module,
+    #[cfg(feature = "wasmtime")]
+    pub wasmtime_module: wasmtime::Module,
     pub proto_version: u32,
     pub cost_inputs: VersionedContractCodeCostInputs,
 }
@@ -214,15 +217,27 @@ impl ParsedModule {
     pub fn new<Ctx: CompilationContext>(
         context: &Ctx,
         curr_ledger_protocol: u32,
-        wasmi_engine: &wasmi::Engine,
+        #[cfg(feature = "wasmi")] wasmi_engine: &wasmi::Engine,
+        #[cfg(feature = "wasmtime")] wasmtime_engine: &wasmtime::Engine,
         wasm: &[u8],
         cost_inputs: VersionedContractCodeCostInputs,
     ) -> Result<Arc<Self>, HostError> {
         cost_inputs.charge_for_parsing(context.as_budget())?;
+
+        #[cfg(feature = "wasmi")]
+        #[allow(unused_variables)]
         let (wasmi_module, proto_version) =
-            Self::parse_wasm(context, curr_ledger_protocol, wasmi_engine, wasm)?;
+            Self::parse_wasmi_module(context, curr_ledger_protocol, wasmi_engine, wasm)?;
+
+        #[cfg(feature = "wasmtime")]
+        let (wasmtime_module, proto_version) =
+            Self::parse_wasmtime_module(context, curr_ledger_protocol, wasmtime_engine, wasm)?;
+
         Ok(Arc::new(Self {
+            #[cfg(feature = "wasmi")]
             wasmi_module,
+            #[cfg(feature = "wasmtime")]
+            wasmtime_module,
             proto_version,
             cost_inputs,
         }))
@@ -238,6 +253,24 @@ impl ParsedModule {
         // we'll leave some future-proofing room here. The important point
         // is to not be introducing a DoS vector.
         const SYM_LEN_LIMIT: usize = 10;
+
+        #[cfg(all(feature = "wasmtime", not(feature = "wasmi")))]
+        let symbols: BTreeSet<(&str, &str)> = self
+            .wasmtime_module
+            .imports()
+            .filter_map(|i| {
+                if i.ty().func().is_some() {
+                    let mod_str = i.module();
+                    let fn_str = i.name();
+                    if mod_str.len() < SYM_LEN_LIMIT && fn_str.len() < SYM_LEN_LIMIT {
+                        return Some((mod_str, fn_str));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        #[cfg(feature = "wasmi")]
         let symbols: BTreeSet<(&str, &str)> = self
             .wasmi_module
             .imports()
@@ -263,9 +296,24 @@ impl ParsedModule {
         callback(&symbols)
     }
 
-    pub fn make_wasmi_linker(&self, host: &Host) -> Result<wasmi::Linker<Host>, HostError> {
+    #[cfg(feature = "wasmi")]
+    pub fn make_wasmi_linker(&self, host: &Host) -> Result<wasmi::Linker<SendHost>, HostError> {
         self.with_import_symbols(host, |symbols| {
             Host::make_minimal_wasmi_linker_for_symbols(host, self.wasmi_module.engine(), symbols)
+        })
+    }
+
+    #[cfg(feature = "wasmtime")]
+    pub fn make_wasmtime_linker(
+        &self,
+        host: &Host,
+    ) -> Result<wasmtime::Linker<SendHost>, HostError> {
+        self.with_import_symbols(host, |symbols| {
+            Host::make_minimal_wasmtime_linker_for_symbols(
+                host,
+                self.wasmtime_module.engine(),
+                symbols,
+            )
         })
     }
 
@@ -275,34 +323,67 @@ impl ParsedModule {
         cost_inputs: VersionedContractCodeCostInputs,
     ) -> Result<Arc<Self>, HostError> {
         use crate::budget::AsBudget;
-        let wasmi_config = crate::vm::get_wasmi_config(host.as_budget())?;
+        #[cfg(feature = "wasmi")]
+        let wasmi_config = crate::budget::get_wasmi_config(host.as_budget())?;
+        #[cfg(feature = "wasmi")]
         let wasmi_engine = wasmi::Engine::new(&wasmi_config);
+
+        #[cfg(feature = "wasmtime")]
+        let wasmtime_config = crate::budget::get_wasmtime_config(host.as_budget())?;
+        #[cfg(feature = "wasmtime")]
+        let wasmtime_engine = host.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
 
         Self::new(
             host,
             host.get_ledger_protocol_version()?,
+            #[cfg(feature = "wasmi")]
             &wasmi_engine,
+            #[cfg(feature = "wasmtime")]
+            &wasmtime_engine,
             wasm,
             cost_inputs,
         )
     }
 
     /// Parse the Wasm blob into a [Module] and its protocol number, checking its interface version
-    fn parse_wasm<Ctx: CompilationContext>(
+    #[cfg(feature = "wasmi")]
+    fn parse_wasmi_module<Ctx: CompilationContext>(
         context: &Ctx,
         curr_ledger_protocol: u32,
         wasmi_engine: &wasmi::Engine,
         wasm: &[u8],
     ) -> Result<(wasmi::Module, u32), HostError> {
-        let module = {
+        let wasmi_module = {
             let _span = tracy_span!("wasmi::Module::new");
             context.map_err(wasmi::Module::new(&wasmi_engine, wasm))?
         };
-        Self::check_max_args(context, &module)?;
-        let interface_version = Self::check_meta_section(context, curr_ledger_protocol, &module)?;
+        Self::check_wasmi_module_max_args(context, &wasmi_module)?;
+        let env_meta =
+            Self::wasmi_module_custom_section(&wasmi_module, meta::ENV_META_V0_SECTION_NAME);
+        let interface_version = Self::check_meta_section(context, curr_ledger_protocol, env_meta)?;
         let contract_proto = interface_version.protocol;
 
-        Ok((module, contract_proto))
+        Ok((wasmi_module, contract_proto))
+    }
+
+    #[cfg(feature = "wasmtime")]
+    fn parse_wasmtime_module<Ctx: CompilationContext>(
+        context: &Ctx,
+        curr_ledger_protocol: u32,
+        wasmtime_engine: &wasmtime::Engine,
+        wasm: &[u8],
+    ) -> Result<(wasmtime::Module, u32), HostError> {
+        let wasmtime_module = {
+            let _span = tracy_span!("wasmtime::Module::new");
+            context.map_wasmtime_error(wasmtime::Module::new(&wasmtime_engine, &wasm))?
+        };
+        Self::check_wasmtime_module_max_args(context, &wasmtime_module)?;
+        let env_meta = Self::wasmtime_module_custom_section(&wasm, meta::ENV_META_V0_SECTION_NAME);
+
+        let interface_version = Self::check_meta_section(context, curr_ledger_protocol, env_meta)?;
+        let contract_proto = interface_version.protocol;
+
+        Ok((wasmtime_module, contract_proto))
     }
 
     fn check_contract_interface_version<Ctx: CompilationContext>(
@@ -439,7 +520,8 @@ impl ParsedModule {
         Ok(())
     }
 
-    fn module_custom_section(m: &wasmi::Module, name: impl AsRef<str>) -> Option<&[u8]> {
+    #[cfg(feature = "wasmi")]
+    fn wasmi_module_custom_section(m: &wasmi::Module, name: impl AsRef<str>) -> Option<&[u8]> {
         m.custom_sections().iter().find_map(|s| {
             if &*s.name == name.as_ref() {
                 Some(&*s.data)
@@ -449,18 +531,28 @@ impl ParsedModule {
         })
     }
 
-    /// Returns the raw bytes content of a named custom section from the Wasm
-    /// module loaded into the [Vm], or `None` if no such custom section exists.
-    pub fn custom_section(&self, name: impl AsRef<str>) -> Option<&[u8]> {
-        Self::module_custom_section(&self.wasmi_module, name)
+    #[cfg(feature = "wasmtime")]
+    fn wasmtime_module_custom_section(wasm_bytes: &[u8], name: impl AsRef<str>) -> Option<&[u8]> {
+        let parser = wasmparser::Parser::new(0);
+        for payload in parser.parse_all(wasm_bytes) {
+            match payload.unwrap() {
+                wasmparser::Payload::CustomSection(reader) => {
+                    if reader.name() == name.as_ref() {
+                        return Some(reader.data());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     fn check_meta_section<Ctx: CompilationContext>(
         context: &Ctx,
         curr_ledger_protocol: u32,
-        m: &wasmi::Module,
+        env_meta: Option<&[u8]>,
     ) -> Result<ScEnvMetaEntryInterfaceVersion, HostError> {
-        if let Some(env_meta) = Self::module_custom_section(m, meta::ENV_META_V0_SECTION_NAME) {
+        if let Some(env_meta) = env_meta {
             let mut limits = DEFAULT_XDR_RW_LIMITS;
             limits.len = env_meta.len();
             let mut cursor = Limited::new(Cursor::new(env_meta), limits);
@@ -485,10 +577,43 @@ impl ParsedModule {
         }
     }
 
-    fn check_max_args<E: ErrorHandler>(handler: &E, m: &wasmi::Module) -> Result<(), HostError> {
+    #[cfg(feature = "wasmi")]
+    fn check_wasmi_module_max_args<E: ErrorHandler>(
+        handler: &E,
+        m: &wasmi::Module,
+    ) -> Result<(), HostError> {
         for e in m.exports() {
             match e.ty() {
                 wasmi::ExternType::Func(f) => {
+                    if f.results().len() > Vm::MAX_VM_ARGS {
+                        return Err(handler.error(
+                            (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
+                            "Too many return values in Wasm export",
+                            &[Val::from_u32(f.results().len() as u32).to_val()],
+                        ));
+                    }
+                    if f.params().len() > Vm::MAX_VM_ARGS {
+                        return Err(handler.error(
+                            (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),
+                            "Too many arguments Wasm export",
+                            &[Val::from_u32(f.params().len() as u32).to_val()],
+                        ));
+                    }
+                }
+                _ => (),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "wasmtime")]
+    fn check_wasmtime_module_max_args<E: ErrorHandler>(
+        handler: &E,
+        m: &wasmtime::Module,
+    ) -> Result<(), HostError> {
+        for e in m.exports() {
+            match e.ty() {
+                wasmtime::ExternType::Func(f) => {
                     if f.results().len() > Vm::MAX_VM_ARGS {
                         return Err(handler.error(
                             (ScErrorType::WasmVm, ScErrorCode::InvalidInput).into(),

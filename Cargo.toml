@@ -22,7 +22,7 @@ exclude = ["soroban-test-wasms/wasm-workspace"]
 # code guarded by `unstable-*` features to make it enabled
 # unconditionally.
 version = "26.0.0-rc.1"
-rust-version = "1.84.0"
+rust-version = "1.87.0"
 
 [workspace.dependencies]
 soroban-env-common = { version = "=26.0.0-rc.1", path = "soroban-env-common", default-features = false }
@@ -32,6 +32,18 @@ soroban-env-macros = { version = "=26.0.0-rc.1", path = "soroban-env-macros" }
 soroban-builtin-sdk-macros = { version = "=26.0.0-rc.1", path = "soroban-builtin-sdk-macros" }
 # NB: this must match the wasmparser version wasmi is using
 wasmparser = "=0.116.1"
+
+[workspace.dependencies.wasmtime]
+version = "42.0"
+default-features = false
+features = ["runtime", "winch", "reexport-wasmparser"]
+
+[workspace.dependencies.wasmtime-environ]
+git = "https://github.com/bytecodealliance/wasmtime"
+rev = "c4688098204ccb3f64338ef1bbc74e72f2b6dab3"
+# path = "/src/wasmtime/crates/environ"
+version = "39.0.0"
+features = ["compile"]
 
 # NB: When updating, also update the version in rs-soroban-env dev-dependencies
 [workspace.dependencies.stellar-xdr]

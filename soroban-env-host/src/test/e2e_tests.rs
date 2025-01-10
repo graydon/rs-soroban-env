@@ -245,6 +245,12 @@ impl ErrorHandler for E2eTestCompilationContext {
         res.map_err(|e| HostError::from(e))
     }
 
+    #[cfg(feature = "wasmtime")]
+    fn map_wasmtime_error<T>(&self, res: Result<T, wasmtime::Error>) -> Result<T, HostError>
+    {
+        HostError::map_wasmtime_error(res)
+    }
+
     fn error(
         &self,
         error: soroban_env_common::Error,
@@ -797,7 +803,7 @@ fn test_wasm_upload_failure_due_to_unsupported_wasm_features() {
     assert!(res.invoke_result.is_err());
     assert!(HostError::result_matches_err(
         res.invoke_result,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
 }
 
@@ -876,7 +882,7 @@ fn test_wasm_upload_failure_in_recording_mode() {
     assert!(res.contract_events.is_empty());
     assert!(HostError::result_matches_err(
         res.invoke_result,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     assert!(res.ledger_changes.is_empty());
     assert!(res.auth.is_empty());
@@ -914,7 +920,7 @@ fn test_unsupported_wasm_upload_failure_in_recording_mode() {
     assert!(res.contract_events.is_empty());
     assert!(HostError::result_matches_err(
         res.invoke_result,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
 }
 
@@ -946,7 +952,7 @@ fn test_wasm_upload_failure_using_simulation() {
     .unwrap();
     assert!(HostError::result_matches_err(
         res.invoke_result,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
 }
 

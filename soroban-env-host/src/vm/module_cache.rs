@@ -1,8 +1,8 @@
 use super::parsed_module::{CompilationContext, ParsedModule, VersionedContractCodeCostInputs};
 #[cfg(any(test, feature = "testutils"))]
 use crate::budget::AsBudget;
+use crate::vm::SendHost;
 use crate::{
-    budget::get_wasmi_config,
     host::metered_clone::MeteredClone,
     xdr::{Hash, ScErrorCode, ScErrorType},
     Host, HostError,
@@ -19,8 +19,14 @@ use std::{
 /// [Engine] is locked during execution and no new modules can be added to it.
 #[derive(Clone, Default)]
 pub struct ModuleCache {
+    #[cfg(feature = "wasmi")]
     pub(crate) wasmi_engine: wasmi::Engine,
-    pub(crate) wasmi_linker: wasmi::Linker<Host>,
+    #[cfg(feature = "wasmtime")]
+    pub(crate) wasmtime_engine: wasmtime::Engine,
+    #[cfg(feature = "wasmi")]
+    pub(crate) wasmi_linker: wasmi::Linker<SendHost>,
+    #[cfg(feature = "wasmtime")]
+    pub(crate) wasmtime_linker: wasmtime::Linker<SendHost>,
     modules: ModuleCacheMap,
 }
 
@@ -84,14 +90,32 @@ impl ModuleCacheMap {
 
 impl ModuleCache {
     pub fn new<Ctx: CompilationContext>(context: &Ctx) -> Result<Self, HostError> {
-        let wasmi_config = get_wasmi_config(context.as_budget())?;
+        #[cfg(feature = "wasmi")]
+        let wasmi_config = crate::budget::get_wasmi_config(context.as_budget())?;
+        #[cfg(feature = "wasmi")]
         let wasmi_engine = wasmi::Engine::new(&wasmi_config);
+
+        #[cfg(feature = "wasmtime")]
+        let wasmtime_config = crate::budget::get_wasmtime_config(context.as_budget())?;
+        #[cfg(feature = "wasmtime")]
+        let wasmtime_engine =
+            context.map_wasmtime_error(wasmtime::Engine::new(&wasmtime_config))?;
+
         let modules = ModuleCacheMap::default();
+        #[cfg(feature = "wasmi")]
         let wasmi_linker = Host::make_maximal_wasmi_linker(context, &wasmi_engine)?;
+        #[cfg(feature = "wasmtime")]
+        let wasmtime_linker = Host::make_maximal_wasmtime_linker(context, &wasmtime_engine)?;
         Ok(Self {
+            #[cfg(feature = "wasmi")]
             wasmi_engine,
+            #[cfg(feature = "wasmtime")]
+            wasmtime_engine,
             modules,
+            #[cfg(feature = "wasmi")]
             wasmi_linker,
+            #[cfg(feature = "wasmtime")]
+            wasmtime_linker,
         })
     }
 
@@ -172,7 +196,10 @@ impl ModuleCache {
         let parsed_module = ParsedModule::new(
             context,
             curr_ledger_protocol,
+            #[cfg(feature = "wasmi")]
             &self.wasmi_engine,
+            #[cfg(feature = "wasmtime")]
+            &self.wasmtime_engine,
             &wasm,
             cost_inputs,
         )?;

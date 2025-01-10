@@ -86,7 +86,7 @@ fn f32_does_not_work() -> Result<(), HostError> {
         crate::vm::Vm::new(&host, ContractId(hash), soroban_test_wasms::ADD_F32),
         (
             crate::xdr::ScErrorType::WasmVm,
-            crate::xdr::ScErrorCode::InvalidAction
+            crate::xdr::ScErrorCode::InvalidInput
         )
     ));
     Ok(())

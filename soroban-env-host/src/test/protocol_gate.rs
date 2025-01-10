@@ -2,8 +2,11 @@ use crate::{
     meta::INTERFACE_VERSION,
     testutils::{generate_account_id, generate_bytes_array, wasm as wasm_util},
     xdr::{ScErrorCode, ScErrorType},
-    AddressObject, Env, Host, HostError, LedgerInfo, Symbol, Val, WasmiMarshal,
+    AddressObject, Env, Host, HostError, LedgerInfo, Symbol,
 };
+
+#[cfg(feature = "wasmi")]
+use crate::{Val, WasmiMarshal};
 
 #[test]
 fn ledger_protocol_greater_than_env_protocol_should_fail() -> Result<(), HostError> {
@@ -208,6 +211,7 @@ fn test_native_mode_calling_protocol_gated_host_fn() -> Result<(), HostError> {
     Ok(())
 }
 
+#[cfg(feature = "wasmi")]
 fn configure_protocol_test_for_runtime_guardrail(
     host: &Host,
     ledger_proto: u32,
@@ -220,20 +224,21 @@ fn configure_protocol_test_for_runtime_guardrail(
     register_and_invoke_custom_vm_no_linker_check(host, wasm.as_slice())
 }
 
+#[cfg(feature = "wasmi")]
 fn register_and_invoke_custom_vm_no_linker_check(
     host: &Host,
     wasm_code: &[u8],
 ) -> Result<wasmi::Value, wasmi::Error> {
-    use crate::vm::protocol_gated_dummy;
+    use crate::vm::{protocol_gated_dummy, SendHost};
     use wasmi::{Engine, Func, Linker, Module, Store, Value};
     let mut config = wasmi::Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
     let module = Module::new(&engine, wasm_code).unwrap();
-    let mut store = Store::new(&engine, host.clone());
+    let mut store = Store::new(&engine, SendHost(host.clone()));
     store.add_fuel(10000000).unwrap();
     store.limiter(|host| host);
-    let mut linker = <Linker<Host>>::new(&engine);
+    let mut linker = <Linker<SendHost>>::new(&engine);
 
     let wrap = |store| Func::wrap(store, protocol_gated_dummy);
     let func = (wrap)(&mut store);
@@ -250,6 +255,7 @@ fn register_and_invoke_custom_vm_no_linker_check(
     res
 }
 
+#[cfg(feature = "wasmi")]
 fn fish_host_error_from_wasm_trap(
     host: &Host,
     res: Result<wasmi::Value, wasmi::Error>,
@@ -269,6 +275,7 @@ fn fish_host_error_from_wasm_trap(
 // safeguard, so these tests create a VM with link-time checks intentionally
 // turned off.
 #[test]
+#[cfg(feature = "wasmi")]
 fn test_additional_protocol_guardrail_during_invocation() -> Result<(), HostError> {
     let host = observe_host!(Host::test_host_with_recording_footprint());
 

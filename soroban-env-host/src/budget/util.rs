@@ -102,6 +102,7 @@ impl Budget {
     /// Fuel count is kept tracked on the Wasmi side, based on the `FuelConfig`
     /// of a specific fuel category. In order to get the correct, unscaled fuel
     /// count, we have to preset all the `FuelConfig` entries to 1.
+    #[cfg(feature = "wasmi")]
     pub fn reset_fuel_config(&self) -> Result<(), HostError> {
         self.0.try_borrow_mut_or_err()?.fuel_costs = wasmi::FuelCosts::default();
         Ok(())

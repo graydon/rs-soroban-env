@@ -405,7 +405,12 @@ fn data_segment_smaller_than_a_page_fits_in_one_page_memory() -> Result<(), Host
     host.as_budget().reset_unlimited_cpu()?;
     let res = upload_wasm_with_data_segment(&host, 1, 0, 5000);
     assert!(res.is_ok());
-    assert_eq!(host.as_budget().get_wasm_mem_alloc()?, 0x10_000);
+    let expected_alloc = if host.is_wasmtime()? {
+        0x10_000
+    } else {
+        0x10_000
+    };
+    assert_eq!(host.as_budget().get_wasm_mem_alloc()?, expected_alloc);
     Ok(())
 }
 
@@ -527,13 +532,13 @@ fn excessive_logging() -> Result<(), HostError> {
     let expected_budget = expect![
         r#"
     =================================================================
-    Cpu limit: 2000000; used: 214303
-    Mem limit: 500000; used: 166812
+    Cpu limit: 2000000; used: 214039
+    Mem limit: 500000; used: 166844
     =================================================================
     CostType                           cpu_insns      mem_bytes      
-    WasmInsnExec                       300            0              
-    MemAlloc                           16632          67392          
-    MemCpy                             2330           0              
+    WasmInsnExec                       28             0              
+    MemAlloc                           16636          67424          
+    MemCpy                             2334           0              
     MemCmp                             472            0              
     DispatchHostFunction               310            0              
     VisitObject                        244            0              
@@ -904,7 +909,7 @@ fn test_floating_point() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -921,7 +926,7 @@ fn test_multiple_memory() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -938,7 +943,7 @@ fn test_function_import_with_wrong_type() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::UnexpectedType)
     ));
     Ok(())
 }
@@ -955,7 +960,7 @@ fn test_import_nonexistent_function() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::MissingValue)
     ));
     Ok(())
 }
@@ -999,7 +1004,7 @@ fn test_export_nonexistent_function() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1016,7 +1021,7 @@ fn test_nonexistent_func_element() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1054,7 +1059,7 @@ fn test_too_large_data_count() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
 
     Ok(())
@@ -1083,7 +1088,7 @@ fn test_lying_about_data_count() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1102,7 +1107,7 @@ fn test_multi_value() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1221,7 +1226,7 @@ fn test_extern_ref_not_allowed() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1239,7 +1244,7 @@ fn test_large_number_of_tables() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1272,7 +1277,7 @@ fn test_simd() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1290,7 +1295,7 @@ fn test_invalid_expr_in_global() -> Result<(), HostError> {
         );
         assert!(HostError::result_matches_err(
             res,
-            (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+            (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
         ));
     }
     Ok(())
@@ -1309,7 +1314,7 @@ fn test_invalid_expr_in_elements() -> Result<(), HostError> {
         );
         assert!(HostError::result_matches_err(
             res,
-            (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+            (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
         ));
     }
     Ok(())
@@ -1328,7 +1333,7 @@ fn test_invalid_expr_in_segments() -> Result<(), HostError> {
         );
         assert!(HostError::result_matches_err(
             res,
-            (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+            (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
         ));
     }
     Ok(())

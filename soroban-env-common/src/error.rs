@@ -219,8 +219,17 @@ impl From<wasmi::Error> for Error {
             Error::from_type_and_code(ScErrorType::Budget, ScErrorCode::ExceededLimit);
         const INDEX_BOUND: Error =
             Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::IndexBounds);
-
+        const INVALID_INPUT: Error =
+            Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InvalidInput);
         match e {
+            wasmi::Error::Global(e) => {
+                if matches!(e, wasmi::errors::GlobalError::TypeMismatch { .. }) {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::UnexpectedType,
+                    );
+                }
+            }
             wasmi::Error::Memory(e) => match e {
                 wasmi::errors::MemoryError::OutOfBoundsAllocation
                 | wasmi::errors::MemoryError::OutOfBoundsGrowth => return EXCEEDED_LIMIT,
@@ -232,6 +241,30 @@ impl From<wasmi::Error> for Error {
                 wasmi::errors::TableError::AccessOutOfBounds { .. }
                 | wasmi::errors::TableError::CopyOutOfBounds => return INDEX_BOUND,
                 _ => (),
+            },
+            wasmi::Error::Linker(e) => match e {
+                wasmi::errors::LinkerError::DuplicateDefinition { .. } => {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::ExistingValue,
+                    )
+                }
+                wasmi::errors::LinkerError::MissingDefinition { .. } => {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::MissingValue,
+                    )
+                }
+                wasmi::errors::LinkerError::FuncTypeMismatch { .. }
+                | wasmi::errors::LinkerError::GlobalTypeMismatch { .. }
+                | wasmi::errors::LinkerError::InvalidMemorySubtype { .. }
+                | wasmi::errors::LinkerError::InvalidTableSubtype { .. }
+                | wasmi::errors::LinkerError::InvalidTypeDefinition { .. } => {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::UnexpectedType,
+                    )
+                }
             },
             wasmi::Error::Instantiation(e) => match e {
                 wasmi::errors::InstantiationError::Memory(me) => match me {
@@ -248,25 +281,18 @@ impl From<wasmi::Error> for Error {
                 },
                 _ => (),
             },
+            wasmi::Error::Module(_) => return INVALID_INPUT,
             wasmi::Error::Store(e) => {
                 if let wasmi::errors::FuelError::OutOfFuel = e {
                     return EXCEEDED_LIMIT;
                 }
             }
-            wasmi::Error::Trap(trap) => {
-                if let Some(code) = trap.trap_code() {
-                    return code.into();
-                }
-            }
             wasmi::Error::Func(e) => {
                 return e.into();
             }
-            wasmi::Error::Global(e) => {
-                if matches!(e, wasmi::errors::GlobalError::TypeMismatch { .. }) {
-                    return Error::from_type_and_code(
-                        ScErrorType::WasmVm,
-                        ScErrorCode::UnexpectedType,
-                    );
+            wasmi::Error::Trap(trap) => {
+                if let Some(code) = trap.trap_code() {
+                    return code.into();
                 }
             }
             _ => (),
@@ -276,10 +302,64 @@ impl From<wasmi::Error> for Error {
     }
 }
 
-#[cfg(feature = "wasmi")]
+// the wasmparser version we bind to is matched to wasmi's version; to access
+// wasmtime's (different!) version of wasmparser, we use the wasmtime re-export
+#[cfg(any(feature = "wasmi", feature = "wasmtime"))]
 impl From<wasmparser::BinaryReaderError> for Error {
     fn from(_: wasmparser::BinaryReaderError) -> Self {
         Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InvalidInput)
+    }
+}
+
+#[cfg(any(feature = "wasmtime"))]
+impl From<wasmtime::wasmparser::BinaryReaderError> for Error {
+    fn from(_: wasmtime::wasmparser::BinaryReaderError) -> Self {
+        Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InvalidInput)
+    }
+}
+
+#[cfg(feature = "wasmtime")]
+impl From<wasmtime::Trap> for Error {
+    #[allow(clippy::wildcard_in_or_patterns)]
+    fn from(trap: wasmtime::Trap) -> Self {
+        let ec = match trap {
+            wasmtime::Trap::UnreachableCodeReached => ScErrorCode::InvalidAction,
+
+            wasmtime::Trap::MemoryOutOfBounds
+            | wasmtime::Trap::TableOutOfBounds
+            | wasmtime::Trap::ArrayOutOfBounds => ScErrorCode::IndexBounds,
+
+            wasmtime::Trap::IndirectCallToNull => ScErrorCode::MissingValue,
+
+            wasmtime::Trap::IntegerDivisionByZero
+            | wasmtime::Trap::IntegerOverflow
+            | wasmtime::Trap::BadConversionToInteger => ScErrorCode::ArithDomain,
+
+            wasmtime::Trap::BadSignature | wasmtime::Trap::CastFailure => {
+                ScErrorCode::UnexpectedType
+            }
+
+            wasmtime::Trap::StackOverflow
+            | wasmtime::Trap::Interrupt
+            | wasmtime::Trap::OutOfFuel
+            | wasmtime::Trap::AllocationTooLarge => {
+                return Error::from_type_and_code(ScErrorType::Budget, ScErrorCode::ExceededLimit)
+            }
+
+            wasmtime::Trap::HeapMisaligned
+            | wasmtime::Trap::AtomicWaitNonSharedMemory
+            | wasmtime::Trap::NullReference
+            | wasmtime::Trap::CannotEnterComponent
+            | _ => ScErrorCode::InvalidAction,
+        };
+        Error::from_type_and_code(ScErrorType::WasmVm, ec)
+    }
+}
+
+#[cfg(feature = "wasmtime")]
+impl From<wasmtime::MemoryAccessError> for Error {
+    fn from(_: wasmtime::MemoryAccessError) -> Self {
+        Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::IndexBounds)
     }
 }
 

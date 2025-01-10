@@ -3628,8 +3628,8 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 828549,
-                mem_bytes: 1216862,
+                instructions: 825251,
+                mem_bytes: 1216886,
                 disk_read_entries: 1,
                 memory_read_entries: 5,
                 write_entries: 2,
@@ -3654,8 +3654,8 @@ fn test_custom_account_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 712830,
-                        mem_bytes: 1197596,
+                        instructions: 709576,
+                        mem_bytes: 1197620,
                         disk_read_entries: 0,
                         memory_read_entries: 3,
                         write_entries: 0,
