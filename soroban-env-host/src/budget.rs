@@ -193,6 +193,7 @@ pub(crate) struct BudgetImpl {
     /// For the purpose of calibration and reporting; not used for budget-limiting nor does it affect consensus
     tracker: BudgetTracker,
     is_in_shadow_mode: bool,
+    #[cfg(feature = "wasmi")]
     fuel_costs: wasmi::FuelCosts,
     depth_limit: u32,
 }
@@ -210,6 +211,7 @@ impl BudgetImpl {
             mem_bytes: BudgetDimension::try_from_config(mem_cost_params, mem_limit)?,
             tracker: BudgetTracker::default(),
             is_in_shadow_mode: false,
+            #[cfg(feature = "wasmi")]
             fuel_costs: load_calibrated_fuel_costs(),
             depth_limit: DEFAULT_HOST_DEPTH_LIMIT,
         })
@@ -304,6 +306,7 @@ impl Default for BudgetImpl {
             mem_bytes: BudgetDimension::default(),
             tracker: Default::default(),
             is_in_shadow_mode: false,
+            #[cfg(feature = "wasmi")]
             fuel_costs: load_calibrated_fuel_costs(),
             depth_limit: DEFAULT_HOST_DEPTH_LIMIT,
         };

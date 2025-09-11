@@ -177,15 +177,21 @@ impl HostError {
             Err(e) => match e.downcast::<HostError>() {
                 Ok(hosterror) => Err(hosterror),
                 Err(e) => {
-                    let e = if let Some(trap) = e.root_cause().downcast_ref::<wasmtime::Trap>() {
-                        HostError::from(Error::from(*trap))
-                    } else {
-                        HostError::from(Error::from_type_and_code(
-                            ScErrorType::WasmVm,
-                            ScErrorCode::InvalidAction,
-                        ))
-                    };
-                    Err(e)
+                    match e.downcast::<wasmtime::Trap>() {
+                        Ok(trap) => Err(HostError::from(trap)),
+                        Err(e) => {
+                            println!("unexpected error chain:");
+                            for cause in e.chain() {
+                                println!("chain entry: {cause:#?}");
+                            }
+                            panic!("map_wasmtime_error got unexpected error type: {e:#?}");
+                            // TODO wasmtime: find residual error cases
+                            // Err(HostError::from(Error::from_type_and_code(
+                            //     ScErrorType::WasmVm,
+                            //     ScErrorCode::InvalidAction,
+                            // )))
+                        }
+                    }
                 }
             },
         }
@@ -307,27 +313,7 @@ impl ErrorHandler for Host {
     // wasmi.
     #[cfg(feature = "wasmtime")]
     fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
-        match r {
-            Ok(t) => Ok(t),
-            Err(e) => match e.downcast::<HostError>() {
-                Ok(hosterror) => Err(hosterror),
-                Err(e) => {
-                    let e = if let Some(trap) = e.root_cause().downcast_ref::<wasmtime::Trap>() {
-                        self.error(Error::from(*trap), "wasmtime trap", &[])
-                    } else {
-                        self.error(
-                            Error::from_type_and_code(
-                                ScErrorType::WasmVm,
-                                ScErrorCode::InvalidAction,
-                            ),
-                            "wasmtime error",
-                            &[],
-                        )
-                    };
-                    Err(e)
-                }
-            },
-        }
+        HostError::map_wasmtime_error(r)
     }
 
     /// At minimum constructs and returns a [HostError] built from the provided

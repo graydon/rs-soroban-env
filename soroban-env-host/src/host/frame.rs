@@ -701,11 +701,7 @@ impl Host {
             let wasm_key = self.contract_code_ledger_key(wasm_hash)?;
             if self.try_borrow_storage_mut()?.has(&wasm_key, self, None)? {
                 if let Some(parsed_module) = cache.get_module(wasm_hash)? {
-                    return Vm::from_parsed_module(
-                        self,
-                        contract_id,
-                        parsed_module,
-                    );
+                    return Vm::from_parsed_module(self, contract_id, parsed_module);
                 }
             }
         };
@@ -764,29 +760,23 @@ impl Host {
         //     - If the module is _not expired_ we assume it'll be survive until
         //       execution, simulate a hit, and risk undercharging.
         if self.in_storage_recording_mode()? {
-            if let Some((parsed_module, _wasmi_linker)) =
-                self.budget_ref().with_observable_shadow_mode(|| {
-                    use crate::vm::ParsedModule;
-                    let wasm_key = self.contract_code_ledger_key(wasm_hash)?;
-                    let is_key_live_in_snapshot = self
-                        .try_borrow_storage_mut()?
-                        .is_key_live_in_snapshot(self, &wasm_key)?;
-                    if is_key_live_in_snapshot {
-                        let (code, costs) = self.retrieve_wasm_from_storage(&wasm_hash)?;
-                        let parsed_module =
-                            ParsedModule::new_with_isolated_engine(self, code.as_slice(), costs)?;
-                        let wasmi_linker = parsed_module.make_wasmi_linker(self)?;
-                        Ok(Some((parsed_module, wasmi_linker)))
-                    } else {
-                        Ok(None)
-                    }
-                })?
-            {
-                return Vm::from_parsed_module(
-                    self,
-                    contract_id,
-                    parsed_module,
-                );
+            if let Some(parsed_module) = self.budget_ref().with_observable_shadow_mode(|| {
+                use crate::vm::ParsedModule;
+                let wasm_key = self.contract_code_ledger_key(wasm_hash)?;
+                let is_key_live_in_snapshot = self
+                    .try_borrow_storage_mut()?
+                    .is_key_live_in_snapshot(self, &wasm_key)?;
+                if is_key_live_in_snapshot {
+                    let (code, costs) = self.retrieve_wasm_from_storage(&wasm_hash)?;
+                    let parsed_module =
+                        ParsedModule::new_with_isolated_engine(self, code.as_slice(), costs)?;
+
+                    Ok(Some(parsed_module))
+                } else {
+                    Ok(None)
+                }
+            })? {
+                return Vm::from_parsed_module(self, contract_id, parsed_module);
             }
         }
 
@@ -955,8 +945,12 @@ impl Host {
                             // trap-unreachable code). It's a little weird
                             // because we're not actually running a VM, but we
                             // prioritize emulation fidelity over honesty here.
+                            #[cfg(all(feature = "wasmi", not(feature = "wasmtime")))]
                             let mut error: Error =
                                 Error::from(wasmi::core::TrapCode::UnreachableCodeReached);
+                            #[cfg(feature = "wasmtime")]
+                            let mut error: Error =
+                                Error::from(wasmtime::Trap::UnreachableCodeReached);
 
                             let mut recovered_error_from_panic_refcell = false;
                             if let Ok(panic) = panic.try_borrow() {

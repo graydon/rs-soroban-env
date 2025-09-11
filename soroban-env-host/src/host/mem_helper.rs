@@ -82,6 +82,7 @@ impl Host {
     ) -> Result<(), HostError> {
         self.charge_budget(ContractCostType::MemCpy, Some(buf.len() as u64))?;
         match vmcaller {
+            #[cfg(feature = "wasmi")]
             VmCaller::WasmiCaller(ctx) => {
                 let mem = vm.get_memory(self)?;
                 self.map_err(
@@ -89,6 +90,7 @@ impl Host {
                         .map_err(|me| wasmi::Error::Memory(me)),
                 )
             }
+            #[cfg(feature = "wasmtime")]
             VmCaller::WasmtimeCaller(ctx) => {
                 let mem = vm.get_wasmtime_memory(self)?;
                 self.map_err(mem.write(ctx, mem_pos as usize, buf))
@@ -111,6 +113,7 @@ impl Host {
         self.charge_budget(ContractCostType::MemCpy, Some(buf.len() as u64))?;
 
         match vmcaller {
+            #[cfg(feature = "wasmi")]
             VmCaller::WasmiCaller(ctx) => {
                 let mem = vm.get_memory(self)?;
                 self.map_err(
@@ -118,6 +121,7 @@ impl Host {
                         .map_err(|me| wasmi::Error::Memory(me)),
                 )
             }
+            #[cfg(feature = "wasmtime")]
             VmCaller::WasmtimeCaller(ctx) => {
                 let mem = vm.get_wasmtime_memory(self)?;
                 self.map_err(mem.read(ctx, mem_pos as usize, buf))
@@ -137,10 +141,12 @@ impl Host {
         vm: &'vm Rc<Vm>,
     ) -> Result<&'caller mut [u8], HostError> {
         match vmcaller {
+            #[cfg(feature = "wasmi")]
             VmCaller::WasmiCaller(ctx) => {
                 let mem = vm.get_memory(self)?;
                 Ok(mem.data_mut(ctx))
             }
+            #[cfg(feature = "wasmtime")]
             VmCaller::WasmtimeCaller(ctx) => {
                 let mem = vm.get_wasmtime_memory(self)?;
                 Ok(mem.data_mut(ctx))
@@ -160,10 +166,12 @@ impl Host {
         vm: &'vm Rc<Vm>,
     ) -> Result<&'caller [u8], HostError> {
         match vmcaller {
+            #[cfg(feature = "wasmi")]
             VmCaller::WasmiCaller(ctx) => {
                 let mem = vm.get_memory(self)?;
                 Ok(mem.data(ctx))
             }
+            #[cfg(feature = "wasmtime")]
             VmCaller::WasmtimeCaller(ctx) => {
                 let mem = vm.get_wasmtime_memory(self)?;
                 Ok(mem.data(ctx))

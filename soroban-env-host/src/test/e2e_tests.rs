@@ -243,6 +243,11 @@ impl ErrorHandler for E2eTestCompilationContext {
         res.map_err(|e| HostError::from(e))
     }
 
+    #[cfg(feature = "wasmtime")]
+    fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
+        HostError::map_wasmtime_error(r)
+    }
+
     fn error(
         &self,
         error: soroban_env_common::Error,

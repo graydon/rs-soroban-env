@@ -1,7 +1,6 @@
 use super::dispatch;
 use crate::Host;
 use soroban_env_common::call_macro_with_all_host_functions;
-use wasmi::{errors::LinkerError, Linker};
 
 pub(crate) struct HostFuncInfo {
     /// String name of the WASM module this host function is importable from.
@@ -18,11 +17,15 @@ pub(crate) struct HostFuncInfo {
     /// Function that takes a wasmi::Linker and adds a dispatch function
     /// for this host function, with the specific type of the dispatch function,
     /// into a Func in the Linker.
-    pub(crate) wrap: fn(&mut Linker<Host>) -> Result<&mut Linker<Host>, LinkerError>,
+    #[cfg(feature = "wasmi")]
+    pub(crate) wrap_wasmi: fn(
+        &mut wasmi::Linker<Host>,
+    ) -> Result<&mut wasmi::Linker<Host>, wasmi::errors::LinkerError>,
 
     /// Function that takes a wasmtime::Linker and adds a dispatch function
     /// for this host function, with the specific type of the dispatch function,
     /// into a Func in the Linker.
+    #[cfg(feature = "wasmtime")]
     pub(crate) wrap_wasmtime:
         fn(&mut wasmtime::Linker<Host>) -> Result<&mut wasmtime::Linker<Host>, wasmtime::Error>,
 
@@ -51,7 +54,9 @@ macro_rules! host_function_info_helper {
             mod_str: $mod_str,
             fn_str: $fn_id,
             arity: fn_arity!($args),
-            wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
+            #[cfg(feature = "wasmi")]
+            wrap_wasmi: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmi_dispatch::$func_id),
+            #[cfg(feature = "wasmtime")]
             wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: Some($min_proto),
             max_proto: Some($max_proto),
@@ -62,7 +67,9 @@ macro_rules! host_function_info_helper {
             mod_str: $mod_str,
             fn_str: $fn_id,
             arity: fn_arity!($args),
-            wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
+            #[cfg(feature = "wasmi")]
+            wrap_wasmi: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmi_dispatch::$func_id),
+            #[cfg(feature = "wasmtime")]
             wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: Some($min_proto),
             max_proto: None,
@@ -73,7 +80,9 @@ macro_rules! host_function_info_helper {
             mod_str: $mod_str,
             fn_str: $fn_id,
             arity: fn_arity!($args),
-            wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
+            #[cfg(feature = "wasmi")]
+            wrap_wasmi: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmi_dispatch::$func_id),
+            #[cfg(feature = "wasmtime")]
             wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: None,
             max_proto: Some($max_proto),
@@ -84,7 +93,9 @@ macro_rules! host_function_info_helper {
             mod_str: $mod_str,
             fn_str: $fn_id,
             arity: fn_arity!($args),
-            wrap: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::$func_id),
+            #[cfg(feature = "wasmi")]
+            wrap_wasmi: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmi_dispatch::$func_id),
+            #[cfg(feature = "wasmtime")]
             wrap_wasmtime: |linker| linker.func_wrap($mod_str, $fn_id, dispatch::wasmtime_dispatch::$func_id),
             min_proto: None,
             max_proto: None,

@@ -127,7 +127,8 @@ mod v21 {
                         Vm::from_parsed_module(
                             host,
                             sample.id.unwrap(),
-                            sample.module,                            &sample.linker,
+                            sample.module,
+                            &sample.linker,
                         )
                         .unwrap(),
                     );

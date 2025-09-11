@@ -87,7 +87,7 @@ macro_rules! impl_tryfroms_and_tryfromvals_delegating_to_valconvert {
 #[macro_export]
 macro_rules! impl_wrapper_wasmi_conversions {
     ($wrapper:ty) => {
-        // wasmi / VM argument support
+        // wasmi argument support
         #[cfg(feature = "wasmi")]
         impl $crate::WasmiMarshal for $wrapper {
             fn try_marshal_from_value(v: wasmi::Value) -> Option<Self> {
@@ -103,6 +103,25 @@ macro_rules! impl_wrapper_wasmi_conversions {
 
             fn marshal_from_self(self) -> wasmi::Value {
                 $crate::Val::marshal_from_self(self.to_val())
+            }
+        }
+
+        // wasmtime argument support
+        #[cfg(feature = "wasmtime")]
+        impl $crate::WasmtimeMarshal for $wrapper {
+            fn try_marshal_from_wasmtime_value(v: wasmtime::Val) -> Option<Self> {
+                if let Some(val) = $crate::Val::try_marshal_from_wasmtime_value(v) {
+                    if <Self as $crate::val::ValConvert>::is_val_type(val) {
+                        return Some(unsafe {
+                            <Self as $crate::val::ValConvert>::unchecked_from_val(val)
+                        });
+                    }
+                }
+                None
+            }
+
+            fn marshal_wasmtime_from_self(self) -> wasmtime::Val {
+                $crate::Val::marshal_wasmtime_from_self(self.to_val())
             }
         }
     };
@@ -205,6 +224,22 @@ macro_rules! declare_wasmi_marshal_for_enum {
 
             fn marshal_from_self(self) -> wasmi::Value {
                 wasmi::Value::I64(self as i64)
+            }
+        }
+
+        #[cfg(feature = "wasmtime")]
+        impl $crate::WasmtimeMarshal for $ENUM {
+            fn try_marshal_from_wasmtime_value(v: wasmtime::Val) -> Option<Self> {
+                if let wasmtime::Val::I64(i) = v {
+                    use num_traits::FromPrimitive;
+                    $ENUM::from_i64(i)
+                } else {
+                    None
+                }
+            }
+
+            fn marshal_wasmtime_from_self(self) -> wasmtime::Val {
+                wasmtime::Val::I64(self as i64)
             }
         }
     };

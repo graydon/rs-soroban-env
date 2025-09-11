@@ -5,7 +5,6 @@ use crate::{
 };
 
 use soroban_env_common::Error;
-use wasmi::{errors::FuelError, Caller, Store};
 
 pub(crate) trait FuelRefillable {
     // Returns the amount of fuel consumed by the VM since the last call to
@@ -57,18 +56,23 @@ pub(crate) trait FuelRefillable {
     }
 }
 
+#[cfg(feature = "wasmi")]
 macro_rules! impl_refillable_for_store {
     ($store: ty) => {
         impl<'a> FuelRefillable for $store {
             fn fuel_consumed(&self, _initial_fuel: u64) -> Result<u64, HostError> {
                 self.fuel_consumed().ok_or_else(|| {
-                    HostError::from(wasmi::Error::Store(FuelError::FuelMeteringDisabled))
+                    HostError::from(wasmi::Error::Store(
+                        wasmi::errors::FuelError::FuelMeteringDisabled,
+                    ))
                 })
             }
 
             fn fuel_total(&self) -> Result<u64, HostError> {
                 self.fuel_total().ok_or_else(|| {
-                    HostError::from(wasmi::Error::Store(FuelError::FuelMeteringDisabled))
+                    HostError::from(wasmi::Error::Store(
+                        wasmi::errors::FuelError::FuelMeteringDisabled,
+                    ))
                 })
             }
 
@@ -84,14 +88,19 @@ macro_rules! impl_refillable_for_store {
         }
     };
 }
-impl_refillable_for_store!(Store<Host>);
-impl_refillable_for_store!(Caller<'a, Host>);
+#[cfg(feature = "wasmi")]
+impl_refillable_for_store!(wasmi::Store<Host>);
+#[cfg(feature = "wasmi")]
+impl_refillable_for_store!(wasmi::Caller<'a, Host>);
 
+#[cfg(feature = "wasmtime")]
 const VM_INTERNAL_ERROR: Error =
     Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InternalError);
 
+#[cfg(feature = "wasmtime")]
 const WASMTIME_FUEL_FACTOR: u64 = 1;
 
+#[cfg(feature = "wasmtime")]
 macro_rules! impl_refillable_for_wasmtime_store {
     ($store: ty) => {
         impl<'a> FuelRefillable for $store {
@@ -122,5 +131,7 @@ macro_rules! impl_refillable_for_wasmtime_store {
         }
     };
 }
+#[cfg(feature = "wasmtime")]
 impl_refillable_for_wasmtime_store!(wasmtime::Store<Host>);
+#[cfg(feature = "wasmtime")]
 impl_refillable_for_wasmtime_store!(wasmtime::Caller<'a, Host>);

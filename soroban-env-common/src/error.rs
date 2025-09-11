@@ -276,7 +276,7 @@ impl From<wasmi::Error> for Error {
     }
 }
 
-#[cfg(feature = "wasmi")]
+#[cfg(any(feature = "wasmi", feature = "wasmtime"))]
 impl From<wasmparser::BinaryReaderError> for Error {
     fn from(_: wasmparser::BinaryReaderError) -> Self {
         Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InvalidInput)
@@ -304,7 +304,8 @@ impl From<wasmtime::Trap> for Error {
 
             wasmtime::Trap::StackOverflow
             | wasmtime::Trap::Interrupt
-            | wasmtime::Trap::OutOfFuel => {
+            | wasmtime::Trap::OutOfFuel
+            | wasmtime::Trap::AllocationTooLarge => {
                 return Error::from_type_and_code(ScErrorType::Budget, ScErrorCode::ExceededLimit)
             }
 

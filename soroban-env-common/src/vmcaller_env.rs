@@ -1,5 +1,5 @@
 #![allow(clippy::needless_lifetimes)]
-#[cfg(feature = "wasmi")]
+#[cfg(any(feature = "wasmi", feature = "wasmtime"))]
 use crate::xdr::{ScErrorCode, ScErrorType};
 
 use super::{
@@ -10,7 +10,7 @@ use super::{
 };
 use crate::call_macro_with_all_host_functions;
 use crate::{CheckedEnvArg, EnvBase, Symbol};
-#[cfg(not(feature = "wasmi"))]
+#[cfg(not(any(feature = "wasmi", feature = "wasmtime")))]
 use core::marker::PhantomData;
 
 /// The VmCallerEnv trait is similar to the Env trait -- it
@@ -28,7 +28,7 @@ use core::marker::PhantomData;
 /// everywhere.
 
 #[cfg(any(feature = "wasmi", feature = "wasmtime"))]
-pub enum VmCaller<'a, T> {
+pub enum VmCaller<'a, T: 'static> {
     #[cfg(feature = "wasmi")]
     WasmiCaller(wasmi::Caller<'a, T>),
     #[cfg(feature = "wasmtime")]
@@ -165,7 +165,7 @@ macro_rules! generate_vmcaller_checked_env_trait {
         /// everywhere.
         pub trait VmCallerEnv: EnvBase
         {
-            type VmUserState;
+            type VmUserState: 'static;
             $(
                 $(
                     // This invokes the host_function_helper! macro above
