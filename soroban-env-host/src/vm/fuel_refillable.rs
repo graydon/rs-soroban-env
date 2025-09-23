@@ -60,7 +60,7 @@ pub(crate) trait FuelRefillable {
 macro_rules! impl_refillable_for_store {
     ($store: ty) => {
         impl<'a> FuelRefillable for $store {
-            fn fuel_consumed(&self, _initial_fuel: u64) -> Result<u64, HostError> {
+            fn fuel_consumed(&self, _last_fuel: u64) -> Result<u64, HostError> {
                 self.fuel_consumed().ok_or_else(|| {
                     HostError::from(wasmi::Error::Store(
                         wasmi::errors::FuelError::FuelMeteringDisabled,
@@ -104,9 +104,10 @@ const WASMTIME_FUEL_FACTOR: u64 = 1;
 macro_rules! impl_refillable_for_wasmtime_store {
     ($store: ty) => {
         impl<'a> FuelRefillable for $store {
-            fn fuel_consumed(&self, initial_fuel: u64) -> Result<u64, HostError> {
+            fn fuel_consumed(&self, last_fuel: u64) -> Result<u64, HostError> {
                 let fuel = self.fuel_total()?;
-                Ok(initial_fuel.saturating_sub(fuel))
+                let consumed = fuel.saturating_sub(last_fuel);
+                Ok(consumed)
             }
 
             fn fuel_total(&self) -> Result<u64, HostError> {

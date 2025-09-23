@@ -82,7 +82,9 @@ pub(crate) fn get_wasmtime_config(_budget: &Budget) -> Result<wasmtime::Config, 
         .consume_fuel(true)
         .wasm_bulk_memory(true)
         .wasm_multi_value(false)
-        .wasm_simd(false)
-        .wasm_tail_call(false);
+        // .wasm_reference_types(false) // cfg("gc")-compiled out entirely
+        .wasm_tail_call(false)
+        .wasm_extended_const(false)
+        .wasm_simd(false);
     Ok(config)
 }
