@@ -166,6 +166,23 @@ impl HostError {
         true
     }
 
+    fn extract_wasmtime_error(e: &(dyn std::error::Error + 'static)) -> HostError {
+        if let Some(he) = e.downcast_ref::<HostError>() {
+            return he.clone();
+        }
+        if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
+            return HostError::from(trap.clone());
+        }
+        if let Some(bre) = e.downcast_ref::<wasmtime::wasmparser::BinaryReaderError>() {
+            return HostError::from(bre.clone());
+        }
+        if let Some(inner) = e.source() {
+            return Self::extract_wasmtime_error(inner);
+        }
+        return HostError::from(Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InternalError));
+        // panic!("map_wasmtime_error got unexpected error type: {e:#?}");
+    }
+
     // Wasmtime uses anyhow::Error for its error type which may carry either a
     // HostError or a wasmtime::Trap, or "something else entirely" since it's a
     // dyn Error type. This is a somewhat different pattern to what we have in
@@ -174,26 +191,7 @@ impl HostError {
     pub fn map_wasmtime_error<T>(r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
         match r {
             Ok(t) => Ok(t),
-            Err(e) => match e.downcast::<HostError>() {
-                Ok(hosterror) => Err(hosterror),
-                Err(e) => {
-                    match e.downcast::<wasmtime::Trap>() {
-                        Ok(trap) => Err(HostError::from(trap)),
-                        Err(e) => {
-                            println!("unexpected error chain:");
-                            for cause in e.chain() {
-                                println!("chain entry: {cause:#?}");
-                            }
-                            panic!("map_wasmtime_error got unexpected error type: {e:#?}");
-                            // TODO wasmtime: find residual error cases
-                            // Err(HostError::from(Error::from_type_and_code(
-                            //     ScErrorType::WasmVm,
-                            //     ScErrorCode::InvalidAction,
-                            // )))
-                        }
-                    }
-                }
-            },
+            Err(e) => Err(Self::extract_wasmtime_error(&*e.into_boxed_dyn_error()))
         }
     }
 }

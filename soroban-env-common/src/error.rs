@@ -276,9 +276,18 @@ impl From<wasmi::Error> for Error {
     }
 }
 
+// the wasmparser version we bind to is matched to wasmi's version; to access
+// wasmtime's (different!) version of wasmparser, we use the wasmtime re-export
 #[cfg(any(feature = "wasmi", feature = "wasmtime"))]
 impl From<wasmparser::BinaryReaderError> for Error {
     fn from(_: wasmparser::BinaryReaderError) -> Self {
+        Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InvalidInput)
+    }
+}
+
+#[cfg(any(feature = "wasmtime"))]
+impl From<wasmtime::wasmparser::BinaryReaderError> for Error {
+    fn from(_: wasmtime::wasmparser::BinaryReaderError) -> Self {
         Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     }
 }
