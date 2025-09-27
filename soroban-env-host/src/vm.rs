@@ -34,6 +34,22 @@ use crate::WasmiMarshal;
 #[cfg(feature = "wasmtime")]
 use crate::WasmtimeMarshal;
 
+#[derive(Clone)]
+pub struct SendHost(pub(crate) crate::Host);
+impl Deref for SendHost {
+    type Target = crate::Host;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for SendHost {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+unsafe impl Send for SendHost {}
+
 use crate::{
     budget::{AsBudget, Budget},
     host::{
@@ -44,7 +60,13 @@ use crate::{
     xdr::{ContractCostType, ContractId, ScErrorCode, ScErrorType},
     ConversionError, ErrorHandler, Host, HostError, Symbol, SymbolStr, TryIntoVal, Val,
 };
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::BTreeSet,
+    ops::{Deref, DerefMut},
+    rc::Rc,
+    sync::Arc,
+};
 
 use fuel_refillable::FuelRefillable;
 use func_info::HOST_FUNCTIONS;
@@ -104,14 +126,14 @@ pub struct Vm {
     #[allow(dead_code)]
     pub(crate) module: Arc<ParsedModule>,
     #[cfg(feature = "wasmi")]
-    wasmi_store: RefCell<wasmi::Store<Host>>,
+    wasmi_store: RefCell<wasmi::Store<SendHost>>,
     #[cfg(feature = "wasmi")]
     wasmi_instance: wasmi::Instance,
     #[cfg(feature = "wasmi")]
     pub(crate) wasmi_memory: Option<wasmi::Memory>,
 
     #[cfg(feature = "wasmtime")]
-    wasmtime_store: RefCell<wasmtime::Store<Host>>,
+    wasmtime_store: RefCell<wasmtime::Store<SendHost>>,
     #[cfg(feature = "wasmtime")]
     wasmtime_instance: wasmtime::Instance,
     #[cfg(feature = "wasmtime")]
@@ -132,7 +154,7 @@ impl Host {
         context: &Ctx,
         engine: &wasmi::Engine,
         symbols: &BTreeSet<(&str, &str)>,
-    ) -> Result<wasmi::Linker<Host>, HostError> {
+    ) -> Result<wasmi::Linker<SendHost>, HostError> {
         let mut linker = wasmi::Linker::new(&engine);
         for hf in HOST_FUNCTIONS {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
@@ -148,7 +170,7 @@ impl Host {
     pub(crate) fn make_maximal_wasmi_linker<Ctx: ErrorHandler>(
         context: &Ctx,
         engine: &wasmi::Engine,
-    ) -> Result<wasmi::Linker<Host>, HostError> {
+    ) -> Result<wasmi::Linker<SendHost>, HostError> {
         let mut linker = wasmi::Linker::new(&engine);
         for hf in HOST_FUNCTIONS {
             context.map_err((hf.wrap_wasmi)(&mut linker).map_err(|le| wasmi::Error::Linker(le)))?;
@@ -163,7 +185,7 @@ impl Host {
         context: &Ctx,
         engine: &wasmtime::Engine,
         symbols: &BTreeSet<(&str, &str)>,
-    ) -> Result<wasmtime::Linker<Host>, HostError> {
+    ) -> Result<wasmtime::Linker<SendHost>, HostError> {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
             if symbols.contains(&(hf.mod_str, hf.fn_str)) {
@@ -178,7 +200,7 @@ impl Host {
     pub(crate) fn make_maximal_wasmtime_linker<Ctx: ErrorHandler>(
         context: &Ctx,
         engine: &wasmtime::Engine,
-    ) -> Result<wasmtime::Linker<Host>, HostError> {
+    ) -> Result<wasmtime::Linker<SendHost>, HostError> {
         let mut linker = wasmtime::Linker::new(engine);
         for hf in HOST_FUNCTIONS {
             context.map_wasmtime_error((hf.wrap_wasmtime)(&mut linker))?;
@@ -214,14 +236,21 @@ impl Vm {
     fn instantiate_wasmi(
         host: &Host,
         parsed_module: &Arc<ParsedModule>,
-        wasmi_linker: &wasmi::Linker<Host>,
-    ) -> Result<(wasmi::Store<Host>, wasmi::Instance, Option<wasmi::Memory>), HostError> {
+        wasmi_linker: &wasmi::Linker<SendHost>,
+    ) -> Result<
+        (
+            wasmi::Store<SendHost>,
+            wasmi::Instance,
+            Option<wasmi::Memory>,
+        ),
+        HostError,
+    > {
         let _span = tracy_span!("Vm::instantiate_wasmi");
 
         let wasmi_engine = parsed_module.wasmi_module.engine();
         let mut store = {
             let _span = tracy_span!("Vm::instantiate_wasmi - store");
-            wasmi::Store::new(wasmi_engine, host.clone())
+            wasmi::Store::new(wasmi_engine, SendHost(host.clone()))
         };
         parsed_module.cost_inputs.charge_for_instantiation(host)?;
         store.limiter(|host| host);
@@ -249,10 +278,10 @@ impl Vm {
     fn instantiate_wasmtime(
         host: &Host,
         parsed_module: &Arc<ParsedModule>,
-        wasmtime_linker: &wasmtime::Linker<Host>,
+        wasmtime_linker: &wasmtime::Linker<SendHost>,
     ) -> Result<
         (
-            wasmtime::Store<Host>,
+            wasmtime::Store<SendHost>,
             wasmtime::Instance,
             Option<wasmtime::Memory>,
         ),
@@ -263,7 +292,7 @@ impl Vm {
         let wasmtime_engine = parsed_module.wasmtime_module.engine();
         let mut wasmtime_store = {
             let _span = tracy_span!("Vm::instantiate_wasmtime - store");
-            wasmtime::Store::new(&wasmtime_engine, host.clone())
+            wasmtime::Store::new(&wasmtime_engine, SendHost(host.clone()))
         };
         parsed_module.cost_inputs.charge_for_instantiation(host)?;
         wasmtime_store.limiter(|host| host);
@@ -289,8 +318,8 @@ impl Vm {
         host: &Host,
         contract_id: ContractId,
         parsed_module: Arc<ParsedModule>,
-        #[cfg(feature = "wasmi")] wasmi_linker: &wasmi::Linker<Host>,
-        #[cfg(feature = "wasmtime")] wasmtime_linker: &wasmtime::Linker<Host>,
+        #[cfg(feature = "wasmi")] wasmi_linker: &wasmi::Linker<SendHost>,
+        #[cfg(feature = "wasmtime")] wasmtime_linker: &wasmtime::Linker<SendHost>,
     ) -> Result<Rc<Self>, HostError> {
         let _span = tracy_span!("Vm::instantiate");
 
@@ -716,29 +745,30 @@ impl Vm {
         }
     }
 
-    /// Utility function that synthesizes a `VmCaller<Host>` configured to point
+    /// Utility function that synthesizes a `VmCaller<SendHost>` configured to point
     /// to this VM's `Store` and `Instance`, and calls the provided function
     /// back with it. Mainly used for testing.
     #[cfg(feature = "wasmi")]
     pub(crate) fn with_wasmi_vmcaller<F, T>(&self, f: F) -> Result<T, HostError>
     where
-        F: FnOnce(&mut VmCaller<Host>) -> Result<T, HostError>,
+        F: FnOnce(&mut VmCaller<SendHost>) -> Result<T, HostError>,
     {
-        let store: &mut wasmi::Store<Host> = &mut *self.wasmi_store.try_borrow_mut_or_err()?;
-        let mut ctx: wasmi::StoreContextMut<Host> = store.into();
-        let caller: wasmi::Caller<Host> = wasmi::Caller::new(&mut ctx, Some(&self.wasmi_instance));
-        let mut vmcaller: VmCaller<Host> = VmCaller::WasmiCaller(caller);
+        let store: &mut wasmi::Store<SendHost> = &mut *self.wasmi_store.try_borrow_mut_or_err()?;
+        let mut ctx: wasmi::StoreContextMut<SendHost> = store.into();
+        let caller: wasmi::Caller<SendHost> =
+            wasmi::Caller::new(&mut ctx, Some(&self.wasmi_instance));
+        let mut vmcaller: VmCaller<SendHost> = VmCaller::WasmiCaller(caller);
         f(&mut vmcaller)
     }
 
     #[cfg(feature = "bench")]
     pub(crate) fn with_caller<F, T>(&self, f: F) -> Result<T, HostError>
     where
-        F: FnOnce(Caller<Host>) -> Result<T, HostError>,
+        F: FnOnce(Caller<SendHost>) -> Result<T, HostError>,
     {
-        let store: &mut wasmi::Store<Host> = &mut *self.wasmi_store.try_borrow_mut_or_err()?;
-        let mut ctx: StoreContextMut<Host> = store.into();
-        let caller: Caller<Host> = Caller::new(&mut ctx, Some(&self.wasmi_instance));
+        let store: &mut wasmi::Store<SendHost> = &mut *self.wasmi_store.try_borrow_mut_or_err()?;
+        let mut ctx: StoreContextMut<SendHost> = store.into();
+        let caller: Caller<SendHost> = Caller::new(&mut ctx, Some(&self.wasmi_instance));
         f(caller)
     }
 

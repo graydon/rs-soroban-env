@@ -1,5 +1,5 @@
 use super::dispatch;
-use crate::Host;
+use crate::vm::SendHost;
 use soroban_env_common::call_macro_with_all_host_functions;
 
 pub(crate) struct HostFuncInfo {
@@ -19,15 +19,17 @@ pub(crate) struct HostFuncInfo {
     /// into a Func in the Linker.
     #[cfg(feature = "wasmi")]
     pub(crate) wrap_wasmi: fn(
-        &mut wasmi::Linker<Host>,
-    ) -> Result<&mut wasmi::Linker<Host>, wasmi::errors::LinkerError>,
+        &mut wasmi::Linker<SendHost>,
+    )
+        -> Result<&mut wasmi::Linker<SendHost>, wasmi::errors::LinkerError>,
 
     /// Function that takes a wasmtime::Linker and adds a dispatch function
     /// for this host function, with the specific type of the dispatch function,
     /// into a Func in the Linker.
     #[cfg(feature = "wasmtime")]
-    pub(crate) wrap_wasmtime:
-        fn(&mut wasmtime::Linker<Host>) -> Result<&mut wasmtime::Linker<Host>, wasmtime::Error>,
+    pub(crate) wrap_wasmtime: fn(
+        &mut wasmtime::Linker<SendHost>,
+    ) -> Result<&mut wasmtime::Linker<SendHost>, wasmtime::Error>,
 
     /// Minimal supported protocol version of this host function
     pub(crate) min_proto: Option<u32>,

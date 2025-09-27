@@ -1,6 +1,7 @@
 use super::parsed_module::{CompilationContext, ParsedModule, VersionedContractCodeCostInputs};
 #[cfg(any(test, feature = "testutils"))]
 use crate::budget::AsBudget;
+use crate::vm::SendHost;
 use crate::{
     host::metered_clone::MeteredClone,
     xdr::{Hash, ScErrorCode, ScErrorType},
@@ -23,9 +24,9 @@ pub struct ModuleCache {
     #[cfg(feature = "wasmtime")]
     pub(crate) wasmtime_engine: wasmtime::Engine,
     #[cfg(feature = "wasmi")]
-    pub(crate) wasmi_linker: wasmi::Linker<Host>,
+    pub(crate) wasmi_linker: wasmi::Linker<SendHost>,
     #[cfg(feature = "wasmtime")]
-    pub(crate) wasmtime_linker: wasmtime::Linker<Host>,
+    pub(crate) wasmtime_linker: wasmtime::Linker<SendHost>,
     modules: ModuleCacheMap,
 }
 

@@ -1,9 +1,11 @@
+use crate::vm::SendHost;
 use crate::{
     budget::AsBudget,
     xdr::{ContractCostType, ScErrorCode, ScErrorType},
     Host, HostError,
 };
 
+#[cfg(feature = "wasmtime")]
 use soroban_env_common::Error;
 
 pub(crate) trait FuelRefillable {
@@ -89,9 +91,9 @@ macro_rules! impl_refillable_for_store {
     };
 }
 #[cfg(feature = "wasmi")]
-impl_refillable_for_store!(wasmi::Store<Host>);
+impl_refillable_for_store!(wasmi::Store<SendHost>);
 #[cfg(feature = "wasmi")]
-impl_refillable_for_store!(wasmi::Caller<'a, Host>);
+impl_refillable_for_store!(wasmi::Caller<'a, SendHost>);
 
 #[cfg(feature = "wasmtime")]
 const VM_INTERNAL_ERROR: Error =
@@ -133,6 +135,6 @@ macro_rules! impl_refillable_for_wasmtime_store {
     };
 }
 #[cfg(feature = "wasmtime")]
-impl_refillable_for_wasmtime_store!(wasmtime::Store<Host>);
+impl_refillable_for_wasmtime_store!(wasmtime::Store<SendHost>);
 #[cfg(feature = "wasmtime")]
-impl_refillable_for_wasmtime_store!(wasmtime::Caller<'a, Host>);
+impl_refillable_for_wasmtime_store!(wasmtime::Caller<'a, SendHost>);

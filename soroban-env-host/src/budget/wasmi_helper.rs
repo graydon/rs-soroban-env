@@ -1,8 +1,9 @@
 use crate::{
     budget::{AsBudget, Budget},
     host::error::TryBorrowOrErr,
+    vm::SendHost,
     xdr::ContractCostType,
-    Host, HostError,
+    HostError,
 };
 use wasmi::{errors, FuelConsumptionMode, FuelCosts, ResourceLimiter};
 
@@ -23,7 +24,7 @@ pub(crate) const WASMI_LIMITS_CONFIG: WasmiLimits = WasmiLimits {
     memories: 1,
 };
 
-impl ResourceLimiter for Host {
+impl ResourceLimiter for SendHost {
     fn memory_growing(
         &mut self,
         current: usize,

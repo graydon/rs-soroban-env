@@ -1,4 +1,5 @@
 use super::FuelRefillable;
+use crate::vm::SendHost;
 use crate::{
     xdr::{ContractCostType, ScErrorCode, ScErrorType},
     CheckedEnvArg, EnvBase, ErrorHandler, Host, HostError, VmCaller, VmCallerEnv,
@@ -244,7 +245,7 @@ pub(crate) mod wasmi_dispatch {
                 // expansion, flattening all functions from all 'mod' blocks
                 // into a set of functions.
                 $(#[$fn_attr])*
-                pub(crate) fn $fn_id(mut caller: wasmi::Caller<Host>, $($arg:i64),*) ->
+                pub(crate) fn $fn_id(mut caller: wasmi::Caller<SendHost>, $($arg:i64),*) ->
                     Result<(i64,), wasmi::core::Trap>
                 {
                     let _span = tracy_span!(core::stringify!($fn_id));
@@ -292,7 +293,7 @@ pub(crate) mod wasmi_dispatch {
                     // happens to be a natural switching point for that: we have
                     // conversions to and from both Val and i64 / u64 for
                     // wasmi::Value.
-                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmi_value(wasmi::Value::I64($arg), &host)?, &host)?),*);
+                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmi_value(wasmi::Value::I64($arg), &host)?, &host.0)?),*);
 
                     if host.tracing_enabled()
                     {
@@ -311,7 +312,7 @@ pub(crate) mod wasmi_dispatch {
 
                     let res = match res {
                         Ok(ok) => {
-                            let ok = ok.check_env_arg(&host)?;
+                            let ok = ok.check_env_arg(&host.0)?;
                             let val: wasmi::Value = ok.marshal_relative_wasmi_value_from_self(&host)?;
                             if let wasmi::Value::I64(v) = val {
                                 Ok((v,))
@@ -424,7 +425,7 @@ pub(crate) mod wasmtime_dispatch {
                 // expansion, flattening all functions from all 'mod' blocks
                 // into a set of functions.
                 $(#[$fn_attr])*
-                pub(crate) fn $fn_id(mut caller: wasmtime::Caller<'_, Host>, $($arg:i64),*) ->
+                pub(crate) fn $fn_id(mut caller: wasmtime::Caller<'_, SendHost>, $($arg:i64),*) ->
                     Result<(i64,), wasmtime::Error>
                 {
                     let _span = tracy_span!(core::stringify!($fn_id));
@@ -475,7 +476,7 @@ pub(crate) mod wasmtime_dispatch {
                     // happens to be a natural switching point for that: we have
                     // conversions to and from both Val and i64 / u64 for
                     // wasmi::Value.
-                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmtime_value(wasmtime::Val::I64($arg), &host)?, &host)?),*);
+                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmtime_value(wasmtime::Val::I64($arg), &host)?, &host.0)?),*);
 
                     if host.tracing_enabled()
                     {
@@ -494,7 +495,7 @@ pub(crate) mod wasmtime_dispatch {
 
                     let res = match res {
                         Ok(ok) => {
-                            let ok = ok.check_env_arg(&host)?;
+                            let ok = ok.check_env_arg(&host.0)?;
                             let val: wasmtime::Val = ok.marshal_relative_wasmtime_value_from_self(&host)?;
                             if let wasmtime::Val::I64(v) = val {
                                 Ok((v,))

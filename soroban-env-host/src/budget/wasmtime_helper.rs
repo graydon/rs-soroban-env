@@ -1,5 +1,6 @@
 use crate::{
     budget::{AsBudget, Budget},
+    vm::SendHost,
     xdr::ContractCostType,
     HostError,
 };
@@ -12,7 +13,7 @@ pub(crate) const WASMTIME_LIMITS_CONFIG: WasmtimeLimits = WasmtimeLimits {
     table_elements: 1000,
 };
 
-impl wasmtime::ResourceLimiter for crate::Host {
+impl wasmtime::ResourceLimiter for SendHost {
     fn memory_growing(
         &mut self,
         current: usize,

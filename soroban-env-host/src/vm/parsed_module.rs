@@ -10,7 +10,7 @@ use crate::{
     ErrorHandler, Host, HostError, Val, DEFAULT_XDR_RW_LIMITS,
 };
 
-use super::{Vm, HOST_FUNCTIONS};
+use super::{SendHost, Vm, HOST_FUNCTIONS};
 use std::{collections::BTreeSet, io::Cursor, sync::Arc};
 
 #[derive(Debug, Clone)]
@@ -297,14 +297,17 @@ impl ParsedModule {
     }
 
     #[cfg(feature = "wasmi")]
-    pub fn make_wasmi_linker(&self, host: &Host) -> Result<wasmi::Linker<Host>, HostError> {
+    pub fn make_wasmi_linker(&self, host: &Host) -> Result<wasmi::Linker<SendHost>, HostError> {
         self.with_import_symbols(host, |symbols| {
             Host::make_minimal_wasmi_linker_for_symbols(host, self.wasmi_module.engine(), symbols)
         })
     }
 
     #[cfg(feature = "wasmtime")]
-    pub fn make_wasmtime_linker(&self, host: &Host) -> Result<wasmtime::Linker<Host>, HostError> {
+    pub fn make_wasmtime_linker(
+        &self,
+        host: &Host,
+    ) -> Result<wasmtime::Linker<SendHost>, HostError> {
         self.with_import_symbols(host, |symbols| {
             Host::make_minimal_wasmtime_linker_for_symbols(
                 host,

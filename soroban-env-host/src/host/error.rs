@@ -166,6 +166,7 @@ impl HostError {
         true
     }
 
+    #[cfg(feature = "wasmtime")]
     fn extract_wasmtime_error(e: &(dyn std::error::Error + 'static)) -> HostError {
         if let Some(he) = e.downcast_ref::<HostError>() {
             return he.clone();
@@ -179,7 +180,10 @@ impl HostError {
         if let Some(inner) = e.source() {
             return Self::extract_wasmtime_error(inner);
         }
-        return HostError::from(Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InternalError));
+        return HostError::from(Error::from_type_and_code(
+            ScErrorType::WasmVm,
+            ScErrorCode::InternalError,
+        ));
         // panic!("map_wasmtime_error got unexpected error type: {e:#?}");
     }
 
@@ -191,7 +195,7 @@ impl HostError {
     pub fn map_wasmtime_error<T>(r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
         match r {
             Ok(t) => Ok(t),
-            Err(e) => Err(Self::extract_wasmtime_error(&*e.into_boxed_dyn_error()))
+            Err(e) => Err(Self::extract_wasmtime_error(&*e.into_boxed_dyn_error())),
         }
     }
 }
