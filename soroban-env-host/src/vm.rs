@@ -529,7 +529,7 @@ impl Vm {
             .wasmi_store
             .try_borrow_mut_or_err()?
             .add_fuel_to_vm(host)?;
-        host.set_last_vm_fuel(added_fuel)?;
+        host.save_last_vm_fuel(added_fuel)?;
 
         // Metering: the `func.call` will trigger `wasmi::Call` (or `CallIndirect`) instruction,
         // which is technically covered by wasmi fuel metering. So we are double charging a bit
@@ -544,7 +544,7 @@ impl Vm {
         // wasmi instruction) remaining when the `OutOfFuel` trap occurs. This is only observable
         // if the contract traps with `OutOfFuel`, which may appear confusing if they look closely
         // at the budget amount consumed. So it should be fine.
-        let last_fuel = host.get_last_vm_fuel()?;
+        let last_fuel = host.take_last_vm_fuel()?;
         self.wasmi_store
             .try_borrow_mut_or_err()?
             .return_fuel_to_host(host, last_fuel)?;
@@ -654,7 +654,7 @@ impl Vm {
             .wasmtime_store
             .try_borrow_mut_or_err()?
             .add_fuel_to_vm(host)?;
-        host.set_last_vm_fuel(added_fuel)?;
+        host.save_last_vm_fuel(added_fuel)?;
 
         let res = {
             let _span = tracy_span!("Vm::metered_wasmtime_func_call - actual call");
@@ -665,7 +665,7 @@ impl Vm {
             )
         };
 
-        let last_fuel = host.get_last_vm_fuel()?;
+        let last_fuel = host.take_last_vm_fuel()?;
         self.wasmtime_store
             .try_borrow_mut_or_err()?
             .return_fuel_to_host(host, last_fuel)?;

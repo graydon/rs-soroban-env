@@ -180,6 +180,54 @@ pub(crate) mod wasmi_dispatch {
     impl WasmiRelativeObjectConversion for StorageType {}
     impl WasmiRelativeObjectConversion for U32Val {}
 
+    struct CallerFuelTransfer<'a> {
+        vmcaller: VmCaller<'a, SendHost>,
+        host: SendHost,
+        finished: bool,
+    }
+
+    impl<'a> CallerFuelTransfer<'a> {
+        fn new(mut caller: wasmi::Caller<'a, SendHost>) -> Result<Self, wasmi::core::Trap> {
+            let host = caller.data().clone();
+            let last_fuel = host.take_last_vm_fuel()?;
+            FuelRefillable::return_fuel_to_host(&mut caller, &host, last_fuel)
+                .map_err(|he| wasmi::core::Trap::from(he))?;
+            Ok(Self {
+                vmcaller: VmCaller::WasmiCaller(caller),
+                host,
+                finished: false,
+            })
+        }
+        fn fini(&mut self) -> Result<(), wasmi::core::Trap> {
+            let caller = self
+                .vmcaller
+                .try_mut()
+                .map_err(|e| wasmi::core::Trap::from(HostError::from(e)))?;
+            let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &self.host)
+                .map_err(|he| wasmi::core::Trap::from(he))?;
+            self.host
+                .save_last_vm_fuel(added_fuel)
+                .map_err(|he| wasmi::core::Trap::from(he))?;
+            self.finished = true;
+            Ok(())
+        }
+    }
+    impl<'a> Drop for CallerFuelTransfer<'a> {
+        fn drop(&mut self) {
+            if self.finished {
+                return;
+            }
+            // This is a fairly last-ditch path we run only when we are already
+            // backing out of a dispatch method with an error anyways (the regular
+            // path calls fini on success), and while it might kinda be nice to pick
+            // up errors from here as well, we can't do so from a dtor. Our best
+            // effort is to at least restore the vm's fuel and make a note about the
+            // update in last_vm_fuel, which doesn't have a _lot_ of ways of
+            // failing.
+            let _ = self.fini();
+        }
+    }
+
     ///////////////////////////////////////////////////////////////////////////////
     /// X-macro use: dispatch functions
     ///////////////////////////////////////////////////////////////////////////////
@@ -245,7 +293,7 @@ pub(crate) mod wasmi_dispatch {
                 // expansion, flattening all functions from all 'mod' blocks
                 // into a set of functions.
                 $(#[$fn_attr])*
-                pub(crate) fn $fn_id(mut caller: wasmi::Caller<SendHost>, $($arg:i64),*) ->
+                pub(crate) fn $fn_id(caller: wasmi::Caller<SendHost>, $($arg:i64),*) ->
                     Result<(i64,), wasmi::core::Trap>
                 {
                     let _span = tracy_span!(core::stringify!($fn_id));
@@ -274,16 +322,15 @@ pub(crate) mod wasmi_dispatch {
                     }
 
                     // This is where the VM -> Host boundary is crossed.
-                    // We first return all fuels from the VM back to the host such that
+                    // We first return all fuel from the VM back to the host such that
                     // the host maintains control of the budget.
-                    let last_fuel = host.get_last_vm_fuel()?;
-                    FuelRefillable::return_fuel_to_host(&mut caller, &host, last_fuel).map_err(|he| wasmi::core::Trap::from(he))?;
+                    let mut fuel_transfer = CallerFuelTransfer::new(caller)?;
 
                     // Charge for the host function dispatching: conversion between VM fuel and
                     // host budget, marshalling values. This does not account for the actual work
                     // being done in those functions, which are metered individually by the implementation.
                     host.charge_budget(ContractCostType::DispatchHostFunction, None)?;
-                    let mut vmcaller = VmCaller::WasmiCaller(caller);
+
                     // The odd / seemingly-redundant use of `wasmi::Value` here
                     // as intermediates -- rather than just passing Vals --
                     // has to do with the fact that some host functions are
@@ -293,7 +340,7 @@ pub(crate) mod wasmi_dispatch {
                     // happens to be a natural switching point for that: we have
                     // conversions to and from both Val and i64 / u64 for
                     // wasmi::Value.
-                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmi_value(wasmi::Value::I64($arg), &host)?, &host.0)?),*);
+                    let res: Result<_, HostError> = host.$fn_id(&mut fuel_transfer.vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmi_value(wasmi::Value::I64($arg), &host)?, &host.0)?),*);
 
                     if host.tracing_enabled()
                     {
@@ -331,11 +378,13 @@ pub(crate) mod wasmi_dispatch {
                         }
                     };
 
-                    // This is where the Host->VM boundary is crossed.
-                    // We supply the remaining host budget as fuel to the VM.
-                    let caller = vmcaller.try_mut().map_err(|e| wasmi::core::Trap::from(HostError::from(e)))?;
-                    let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| wasmi::core::Trap::from(he))?;
-                    host.set_last_vm_fuel(added_fuel)?;
+                    // This is where the Host->VM boundary is crossed. We supply
+                    // the remaining host budget as fuel to the VM.
+                    //
+                    // Note: it is possible we did not get here (if an
+                    // arg-marshal step above failed), but the `fuel_transfer`
+                    // dtor will try to ensure fini() is called anyways.
+                    fuel_transfer.fini()?;
 
                     res
                 }
@@ -359,6 +408,50 @@ pub(crate) mod wasmtime_dispatch {
     impl WasmtimeRelativeObjectConversion for Error {}
     impl WasmtimeRelativeObjectConversion for StorageType {}
     impl WasmtimeRelativeObjectConversion for U32Val {}
+
+    struct CallerFuelTransfer<'a> {
+        vmcaller: VmCaller<'a, SendHost>,
+        host: SendHost,
+        finished: bool,
+    }
+
+    impl<'a> CallerFuelTransfer<'a> {
+        fn new(mut caller: wasmtime::Caller<'a, SendHost>) -> Result<Self, wasmtime::Error> {
+            let host = caller.data().clone();
+            let last_fuel = host.take_last_vm_fuel()?;
+            FuelRefillable::return_fuel_to_host(&mut caller, &host, last_fuel)?;
+            Ok(Self {
+                vmcaller: VmCaller::WasmtimeCaller(caller),
+                host,
+                finished: false,
+            })
+        }
+        fn fini(&mut self) -> Result<(), wasmtime::Error> {
+            let caller = self
+                .vmcaller
+                .try_mut_wasmtime()
+                .map_err(|e| HostError::from(e))?;
+            let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &self.host)?;
+            self.host.save_last_vm_fuel(added_fuel)?;
+            self.finished = true;
+            Ok(())
+        }
+    }
+    impl<'a> Drop for CallerFuelTransfer<'a> {
+        fn drop(&mut self) {
+            if self.finished {
+                return;
+            }
+            // This is a fairly last-ditch path we run only when we are already
+            // backing out of a dispatch method with an error anyways (the regular
+            // path calls fini on success), and while it might kinda be nice to pick
+            // up errors from here as well, we can't do so from a dtor. Our best
+            // effort is to at least restore the vm's fuel and make a note about the
+            // update in last_vm_fuel, which doesn't have a _lot_ of ways of
+            // failing.
+            let _ = self.fini();
+        }
+    }
 
     ///////////////////////////////////////////////////////////////////////////////
     /// X-macro use: dispatch functions
@@ -425,7 +518,7 @@ pub(crate) mod wasmtime_dispatch {
                 // expansion, flattening all functions from all 'mod' blocks
                 // into a set of functions.
                 $(#[$fn_attr])*
-                pub(crate) fn $fn_id(mut caller: wasmtime::Caller<'_, SendHost>, $($arg:i64),*) ->
+                pub(crate) fn $fn_id(caller: wasmtime::Caller<'_, SendHost>, $($arg:i64),*) ->
                     Result<(i64,), wasmtime::Error>
                 {
                     let _span = tracy_span!(core::stringify!($fn_id));
@@ -454,18 +547,14 @@ pub(crate) mod wasmtime_dispatch {
                     }
 
                     // This is where the VM -> Host boundary is crossed.
-                    // We first return all fuels from the VM back to the host such that
+                    // We first return all fuel from the VM back to the host such that
                     // the host maintains control of the budget.
-
-                    let last_fuel = host.get_last_vm_fuel()?;
-                    FuelRefillable::return_fuel_to_host(&mut caller, &host, last_fuel).map_err(|he| wasmtime::Error::from(he))?;
+                    let mut fuel_transfer = CallerFuelTransfer::new(caller)?;
 
                     // Charge for the host function dispatching: conversion between VM fuel and
                     // host budget, marshalling values. This does not account for the actual work
                     // being done in those functions, which are metered individually by the implementation.
                     host.charge_budget(ContractCostType::DispatchHostFunction, None)?;
-
-                    let mut vmcaller = VmCaller::WasmtimeCaller(caller);
 
                     // The odd / seemingly-redundant use of `wasmi::Value` here
                     // as intermediates -- rather than just passing Vals --
@@ -476,7 +565,7 @@ pub(crate) mod wasmtime_dispatch {
                     // happens to be a natural switching point for that: we have
                     // conversions to and from both Val and i64 / u64 for
                     // wasmi::Value.
-                    let res: Result<_, HostError> = host.$fn_id(&mut vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmtime_value(wasmtime::Val::I64($arg), &host)?, &host.0)?),*);
+                    let res: Result<_, HostError> = host.$fn_id(&mut fuel_transfer.vmcaller, $(<$type>::check_env_arg(<$type>::try_marshal_from_relative_wasmtime_value(wasmtime::Val::I64($arg), &host)?, &host.0)?),*);
 
                     if host.tracing_enabled()
                     {
@@ -513,11 +602,13 @@ pub(crate) mod wasmtime_dispatch {
                         }
                     };
 
-                    // This is where the Host->VM boundary is crossed.
-                    // We supply the remaining host budget as fuel to the VM.
-                    let caller = vmcaller.try_mut_wasmtime().map_err(|e| wasmtime::Error::from(HostError::from(e)))?;
-                    let added_fuel = FuelRefillable::add_fuel_to_vm(caller, &host).map_err(|he| wasmtime::Error::from(he))?;
-                    host.set_last_vm_fuel(added_fuel)?;
+                    // This is where the Host->VM boundary is crossed. We supply
+                    // the remaining host budget as fuel to the VM.
+                    //
+                    // Note: it is possible we did not get here (if an
+                    // arg-marshal step above failed), but the `fuel_transfer`
+                    // dtor will try to ensure fini() is called anyways.
+                    fuel_transfer.fini()?;
 
                     Ok(res?)
                 }

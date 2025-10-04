@@ -108,7 +108,7 @@ macro_rules! impl_refillable_for_wasmtime_store {
         impl<'a> FuelRefillable for $store {
             fn fuel_consumed(&self, last_fuel: u64) -> Result<u64, HostError> {
                 let fuel = self.fuel_total()?;
-                let consumed = fuel.saturating_sub(last_fuel);
+                let consumed = last_fuel.saturating_sub(fuel);
                 Ok(consumed)
             }
 
