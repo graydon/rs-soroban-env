@@ -167,24 +167,46 @@ impl HostError {
     }
 
     #[cfg(feature = "wasmtime")]
-    fn extract_wasmtime_error(e: &(dyn std::error::Error + 'static)) -> HostError {
-        if let Some(he) = e.downcast_ref::<HostError>() {
-            return he.clone();
+    fn extract_wasmtime_error(e: &wasmtime::Error) -> HostError {
+        // println!("extracting wasmtime error: Debug: {:?}", e);
+        // println!("extracting wasmtime error: Display: {}", e);
+        // try searching the chain for something we recognize
+        for source in e.chain() {
+            println!("examining source in chain: {:?}", source);
+            if let Some(he) = source.downcast_ref::<HostError>() {
+                println!("got HostError in chain: {:?}", he.error);
+                return he.clone();
+            }
+            if let Some(trap) = source.downcast_ref::<wasmtime::Trap>() {
+                println!("got wasmtime Trap in chain: {:?}", trap);
+                return HostError::from(trap.clone());
+            }
+            if let Some(bre) = source.downcast_ref::<wasmtime::wasmparser::BinaryReaderError>() {
+                println!("got BinaryReaderError in chain: {:?}", bre);
+                return HostError::from(bre.clone());
+            }
+            if let Some(ce) = source.downcast_ref::<wasmtime_environ::CompileError>() {
+                println!("got CompileError in chain: {:?}", ce);
+                return HostError::from(Error::from_type_and_code(
+                    ScErrorType::WasmVm,
+                    ScErrorCode::InvalidInput,
+                ));
+            }
+            // Oh I do not like this part:
+            let s = source.to_string();
+            if s.contains("types incompatible") {
+                println!("got 'types incompatible' in chain: {:?}", s);
+                return HostError::from(Error::from_type_and_code(
+                    ScErrorType::WasmVm,
+                    ScErrorCode::UnexpectedType,
+                ));
+            }
         }
-        if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
-            return HostError::from(trap.clone());
-        }
-        if let Some(bre) = e.downcast_ref::<wasmtime::wasmparser::BinaryReaderError>() {
-            return HostError::from(bre.clone());
-        }
-        if let Some(inner) = e.source() {
-            return Self::extract_wasmtime_error(inner);
-        }
+        println!("bottoming out in InternalError");
         return HostError::from(Error::from_type_and_code(
             ScErrorType::WasmVm,
             ScErrorCode::InternalError,
         ));
-        // panic!("map_wasmtime_error got unexpected error type: {e:#?}");
     }
 
     // Wasmtime uses anyhow::Error for its error type which may carry either a
@@ -195,7 +217,8 @@ impl HostError {
     pub fn map_wasmtime_error<T>(r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
         match r {
             Ok(t) => Ok(t),
-            Err(e) => Err(Self::extract_wasmtime_error(&*e.into_boxed_dyn_error())),
+            //Err(e) => Err(Self::extract_wasmtime_error(&*e.into_boxed_dyn_error())),
+            Err(e) => Err(Self::extract_wasmtime_error(&e)),
         }
     }
 }

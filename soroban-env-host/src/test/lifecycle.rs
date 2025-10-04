@@ -660,7 +660,7 @@ fn test_invalid_contract() {
         .unwrap();
 
     assert!(err.error.is_type(ScErrorType::WasmVm));
-    assert!(err.error.is_code(ScErrorCode::InvalidAction));
+    assert!(err.error.is_code(ScErrorCode::InvalidInput));
 }
 
 #[test]

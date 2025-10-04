@@ -888,7 +888,7 @@ fn test_floating_point() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -905,7 +905,7 @@ fn test_multiple_memory() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -922,7 +922,7 @@ fn test_function_import_with_wrong_type() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -939,7 +939,7 @@ fn test_import_nonexistent_function() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::MissingValue)
     ));
     Ok(())
 }
@@ -983,7 +983,7 @@ fn test_export_nonexistent_function() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1000,7 +1000,7 @@ fn test_nonexistent_func_element() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1038,7 +1038,7 @@ fn test_too_large_data_count() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
 
     Ok(())
@@ -1067,7 +1067,7 @@ fn test_lying_about_data_count() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1086,7 +1086,7 @@ fn test_multi_value() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1205,7 +1205,7 @@ fn test_extern_ref_not_allowed() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1223,7 +1223,7 @@ fn test_large_number_of_tables() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1256,7 +1256,7 @@ fn test_simd() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -1274,7 +1274,7 @@ fn test_invalid_expr_in_global() -> Result<(), HostError> {
         );
         assert!(HostError::result_matches_err(
             res,
-            (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+            (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
         ));
     }
     Ok(())
@@ -1293,7 +1293,7 @@ fn test_invalid_expr_in_elements() -> Result<(), HostError> {
         );
         assert!(HostError::result_matches_err(
             res,
-            (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+            (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
         ));
     }
     Ok(())
@@ -1312,7 +1312,7 @@ fn test_invalid_expr_in_segments() -> Result<(), HostError> {
         );
         assert!(HostError::result_matches_err(
             res,
-            (ScErrorType::WasmVm, ScErrorCode::InvalidAction)
+            (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
         ));
     }
     Ok(())

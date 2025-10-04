@@ -1982,6 +1982,7 @@ dependencies = [
  "wasmparser 0.116.1",
  "wasmprinter 0.2.72",
  "wasmtime",
+ "wasmtime-environ",
  "wycheproof",
 ]
 

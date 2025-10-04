@@ -219,8 +219,17 @@ impl From<wasmi::Error> for Error {
             Error::from_type_and_code(ScErrorType::Budget, ScErrorCode::ExceededLimit);
         const INDEX_BOUND: Error =
             Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::IndexBounds);
-
+        const INVALID_INPUT: Error =
+            Error::from_type_and_code(ScErrorType::WasmVm, ScErrorCode::InvalidInput);
         match e {
+            wasmi::Error::Global(e) => {
+                if matches!(e, wasmi::errors::GlobalError::TypeMismatch { .. }) {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::UnexpectedType,
+                    );
+                }
+            }
             wasmi::Error::Memory(e) => match e {
                 wasmi::errors::MemoryError::OutOfBoundsAllocation
                 | wasmi::errors::MemoryError::OutOfBoundsGrowth => return EXCEEDED_LIMIT,
@@ -232,6 +241,30 @@ impl From<wasmi::Error> for Error {
                 wasmi::errors::TableError::AccessOutOfBounds { .. }
                 | wasmi::errors::TableError::CopyOutOfBounds => return INDEX_BOUND,
                 _ => (),
+            },
+            wasmi::Error::Linker(e) => match e {
+                wasmi::errors::LinkerError::DuplicateDefinition { .. } => {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::ExistingValue,
+                    )
+                }
+                wasmi::errors::LinkerError::MissingDefinition { .. } => {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::MissingValue,
+                    )
+                }
+                wasmi::errors::LinkerError::FuncTypeMismatch { .. }
+                | wasmi::errors::LinkerError::GlobalTypeMismatch { .. }
+                | wasmi::errors::LinkerError::InvalidMemorySubtype { .. }
+                | wasmi::errors::LinkerError::InvalidTableSubtype { .. }
+                | wasmi::errors::LinkerError::InvalidTypeDefinition { .. } => {
+                    return Error::from_type_and_code(
+                        ScErrorType::WasmVm,
+                        ScErrorCode::UnexpectedType,
+                    )
+                }
             },
             wasmi::Error::Instantiation(e) => match e {
                 wasmi::errors::InstantiationError::Memory(me) => match me {
@@ -248,25 +281,18 @@ impl From<wasmi::Error> for Error {
                 },
                 _ => (),
             },
+            wasmi::Error::Module(_) => return INVALID_INPUT,
             wasmi::Error::Store(e) => {
                 if let wasmi::errors::FuelError::OutOfFuel = e {
                     return EXCEEDED_LIMIT;
                 }
             }
-            wasmi::Error::Trap(trap) => {
-                if let Some(code) = trap.trap_code() {
-                    return code.into();
-                }
-            }
             wasmi::Error::Func(e) => {
                 return e.into();
             }
-            wasmi::Error::Global(e) => {
-                if matches!(e, wasmi::errors::GlobalError::TypeMismatch { .. }) {
-                    return Error::from_type_and_code(
-                        ScErrorType::WasmVm,
-                        ScErrorCode::UnexpectedType,
-                    );
+            wasmi::Error::Trap(trap) => {
+                if let Some(code) = trap.trap_code() {
+                    return code.into();
                 }
             }
             _ => (),
