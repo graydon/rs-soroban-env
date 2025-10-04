@@ -834,6 +834,13 @@ impl Host {
     pub fn is_same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
+
+    pub(crate) fn is_wasmtime(&self) -> Result<bool, HostError> {
+        Ok(
+            self.get_ledger_protocol_version()? >= crate::Vm::FIRST_PROTOCOL_TO_RUN_ON_WASMTIME
+                && cfg!(feature = "wasmtime"),
+        )
+    }
 }
 
 macro_rules! call_trace_env_call {

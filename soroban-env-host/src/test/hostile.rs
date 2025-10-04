@@ -405,7 +405,12 @@ fn data_segment_smaller_than_a_page_fits_in_one_page_memory() -> Result<(), Host
     host.as_budget().reset_unlimited_cpu()?;
     let res = upload_wasm_with_data_segment(&host, 1, 0, 5000);
     assert!(res.is_ok());
-    assert_eq!(host.as_budget().get_wasm_mem_alloc()?, 0x10_000);
+    let expected_alloc = if host.is_wasmtime()? {
+        0x20_000
+    } else {
+        0x10_000
+    };
+    assert_eq!(host.as_budget().get_wasm_mem_alloc()?, expected_alloc);
     Ok(())
 }
 

@@ -681,7 +681,7 @@ impl Vm {
     }
 
     // FIXME: remove when/if we decide to commit to this transition.
-    const FIRST_PROTOCOL_TO_RUN_ON_WASMTIME: u32 = 21;
+    pub(crate) const FIRST_PROTOCOL_TO_RUN_ON_WASMTIME: u32 = 21;
 
     pub(crate) fn invoke_function_raw(
         self: &Rc<Self>,
@@ -691,7 +691,7 @@ impl Vm {
         treat_missing_function_as_noop: bool,
     ) -> Result<Val, HostError> {
         let _span = tracy_span!("Vm::invoke_function_raw");
-        if host.get_ledger_protocol_version()? >= Self::FIRST_PROTOCOL_TO_RUN_ON_WASMTIME {
+        if host.is_wasmtime()? {
             #[cfg(feature = "wasmtime")]
             {
                 Vec::<wasmtime::Val>::charge_bulk_init_cpy(args.len() as u64, host.as_budget())?;
