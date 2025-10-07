@@ -167,26 +167,23 @@ impl HostError {
     }
 
     #[cfg(feature = "wasmtime")]
-    fn extract_wasmtime_error(e: &wasmtime::Error) -> HostError {
-        // println!("extracting wasmtime error: Debug: {:?}", e);
-        // println!("extracting wasmtime error: Display: {}", e);
+    fn extract_wasmtime_error(e: &wasmtime::Error, debug_fn: impl FnOnce(&dyn Debug)) -> HostError
+    {
         // try searching the chain for something we recognize
         for source in e.chain() {
-            println!("examining source in chain: {:?}", source);
             if let Some(he) = source.downcast_ref::<HostError>() {
-                println!("got HostError in chain: {:?}", he.error);
                 return he.clone();
             }
             if let Some(trap) = source.downcast_ref::<wasmtime::Trap>() {
-                println!("got wasmtime Trap in chain: {:?}", trap);
+                debug_fn(&trap);
                 return HostError::from(trap.clone());
             }
             if let Some(bre) = source.downcast_ref::<wasmtime::wasmparser::BinaryReaderError>() {
-                println!("got BinaryReaderError in chain: {:?}", bre);
+                debug_fn(&bre);
                 return HostError::from(bre.clone());
             }
             if let Some(ce) = source.downcast_ref::<wasmtime_environ::CompileError>() {
-                println!("got CompileError in chain: {:?}", ce);
+                debug_fn(&ce);
                 return HostError::from(Error::from_type_and_code(
                     ScErrorType::WasmVm,
                     ScErrorCode::InvalidInput,
@@ -195,17 +192,16 @@ impl HostError {
             // Oh I do not like this part:
             let s = source.to_string();
             if s.contains("types incompatible") {
-                println!("got 'types incompatible' in chain: {:?}", s);
+                debug_fn(&source);
                 return HostError::from(Error::from_type_and_code(
                     ScErrorType::WasmVm,
                     ScErrorCode::UnexpectedType,
                 ));
             }
         }
-        println!("bottoming out in InternalError");
         return HostError::from(Error::from_type_and_code(
             ScErrorType::WasmVm,
-            ScErrorCode::InternalError,
+            ScErrorCode::InvalidAction,
         ));
     }
 
@@ -217,8 +213,7 @@ impl HostError {
     pub fn map_wasmtime_error<T>(r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
         match r {
             Ok(t) => Ok(t),
-            //Err(e) => Err(Self::extract_wasmtime_error(&*e.into_boxed_dyn_error())),
-            Err(e) => Err(Self::extract_wasmtime_error(&e)),
+            Err(e) => Err(Self::extract_wasmtime_error(&e, |_| ())),
         }
     }
 }
@@ -337,8 +332,21 @@ impl ErrorHandler for Host {
     // dyn Error type. This is a somewhat different pattern to what we have in
     // wasmi.
     #[cfg(feature = "wasmtime")]
-    fn map_wasmtime_error<T>(&self, r: Result<T, wasmtime::Error>) -> Result<T, HostError> {
-        HostError::map_wasmtime_error(r)
+    fn map_wasmtime_error<T>(&self, res: Result<T, wasmtime::Error>) -> Result<T, HostError> {
+        res.map_err(|e| {
+            use std::borrow::Cow;
+            let mut msg: Cow<'_, str> = Cow::Borrowed(&"");
+            // This observes the debug state, but it only causes a different
+            // (richer) string to be logged as a diagnostic event, which
+            // is itself not observable outside the debug state.
+            let he = HostError::extract_wasmtime_error(&e, |d| {
+                self.with_debug_mode(|| {
+                    msg = Cow::Owned(format!("{:?}", d));
+                    Ok(())
+                })
+            });
+            self.error(he.error, &msg, &[])
+        })
     }
 
     /// At minimum constructs and returns a [HostError] built from the provided
