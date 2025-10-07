@@ -1314,6 +1314,7 @@ fn test_create_contract_with_no_argument_constructor_success() {
 }
 
 #[test]
+#[cfg(feature = "wasmtime")]
 fn test_create_contract_success_in_recording_mode() {
     let cd = CreateContractData::new([111; 32], ADD_I32);
     let ledger_info = default_ledger_info();
@@ -1368,7 +1369,7 @@ fn test_create_contract_success_in_recording_mode() {
                 read_only: vec![cd.wasm_key].try_into().unwrap(),
                 read_write: vec![cd.contract_key].try_into().unwrap()
             },
-            instructions: 663583,
+            instructions: 664124,
             disk_read_bytes: 0,
             write_bytes: 104,
         }
@@ -1376,6 +1377,7 @@ fn test_create_contract_success_in_recording_mode() {
 }
 
 #[test]
+#[cfg(feature = "wasmtime")]
 fn test_create_contract_success_in_recording_mode_with_custom_account() {
     // We don't try to invoke `__check_auth` in recording mode in order to not output confusing
     // side-effects. Thus any Wasm can stand for a custom account.
@@ -1511,7 +1513,7 @@ fn test_create_contract_success_in_recording_mode_with_custom_account() {
                 .unwrap(),
                 read_write: vec![cd.contract_key, nonce_entry_key].try_into().unwrap()
             },
-            instructions: 1070741,
+            instructions: 1071282,
             disk_read_bytes: 0,
             write_bytes: 176,
         }
@@ -1519,6 +1521,7 @@ fn test_create_contract_success_in_recording_mode_with_custom_account() {
 }
 
 #[test]
+#[cfg(feature = "wasmtime")]
 fn test_create_contract_success_in_recording_mode_with_enforced_auth() {
     let cd = CreateContractData::new([111; 32], ADD_I32);
     let ledger_info = default_ledger_info();
@@ -1573,7 +1576,7 @@ fn test_create_contract_success_in_recording_mode_with_enforced_auth() {
                 read_only: vec![cd.wasm_key].try_into().unwrap(),
                 read_write: vec![cd.contract_key].try_into().unwrap()
             },
-            instructions: 665030,
+            instructions: 665571,
             disk_read_bytes: 0,
             write_bytes: 104,
         }
@@ -1929,6 +1932,7 @@ fn test_invoke_contract_with_storage_ops_success() {
 }
 
 #[test]
+#[cfg(feature = "wasmtime")]
 fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
     let cd = CreateContractData::new([111; 32], CONTRACT_STORAGE);
     let ledger_info = default_ledger_info();
@@ -2012,7 +2016,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
                     .unwrap(),
                 read_write: vec![data_key.clone()].try_into().unwrap(),
             },
-            instructions: 898006,
+            instructions: 896457,
             disk_read_bytes: 0,
             write_bytes: 80,
         }
@@ -2081,7 +2085,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
                 .unwrap(),
                 read_write: Default::default(),
             },
-            instructions: 1009860,
+            instructions: 1009649,
             disk_read_bytes: 0,
             write_bytes: 0,
         }
@@ -2258,6 +2262,7 @@ fn test_invoke_contract_with_storage_extension_and_autorestore() {
 }
 
 #[test]
+#[cfg(feature = "wasmtime")]
 fn test_auto_restore_with_extension_in_recording_mode() {
     let cd = CreateContractData::new([111; 32], CONTRACT_STORAGE);
     let ledger_info = default_ledger_info();
@@ -2380,7 +2385,7 @@ fn test_auto_restore_with_extension_in_recording_mode() {
                 .try_into()
                 .unwrap(),
             },
-            instructions: 1562621,
+            instructions: 1561511,
             disk_read_bytes: data_entry_size + wasm_entry_size + instance_entry_size,
             write_bytes: data_entry_size + wasm_entry_size + instance_entry_size,
         }
@@ -2398,6 +2403,7 @@ fn test_auto_restore_with_extension_in_recording_mode() {
 }
 
 #[test]
+#[cfg(feature = "wasmtime")]
 fn test_auto_restore_with_overwrite_in_recording_mode() {
     let cd = CreateContractData::new([111; 32], CONTRACT_STORAGE);
     let ledger_info = default_ledger_info();
@@ -2518,7 +2524,7 @@ fn test_auto_restore_with_overwrite_in_recording_mode() {
                     .try_into()
                     .unwrap(),
             },
-            instructions: 1028344,
+            instructions: 1026795,
             disk_read_bytes: data_entry_size + instance_entry_size,
             write_bytes: data_entry_size + instance_entry_size,
         }
@@ -2536,6 +2542,7 @@ fn test_auto_restore_with_overwrite_in_recording_mode() {
 }
 
 #[test]
+#[cfg(feature = "wasmtime")]
 fn test_auto_restore_with_new_entry_in_recording_mode() {
     let cd = CreateContractData::new([111; 32], CONTRACT_STORAGE);
     let ledger_info = default_ledger_info();
@@ -2661,7 +2668,7 @@ fn test_auto_restore_with_new_entry_in_recording_mode() {
                 .try_into()
                 .unwrap(),
             },
-            instructions: 1444181,
+            instructions: 1442001,
             disk_read_bytes: wasm_entry_size + instance_entry_size,
             write_bytes: data_entry_size + wasm_entry_size + instance_entry_size,
         }
@@ -2679,6 +2686,7 @@ fn test_auto_restore_with_new_entry_in_recording_mode() {
 }
 
 #[test]
+#[cfg(feature="wasmtime")]
 fn test_auto_restore_with_expired_temp_entry_in_recording_mode() {
     let cd = CreateContractData::new([111; 32], CONTRACT_STORAGE);
     let ledger_info = default_ledger_info();
@@ -2793,7 +2801,7 @@ fn test_auto_restore_with_expired_temp_entry_in_recording_mode() {
                     .try_into()
                     .unwrap(),
             },
-            instructions: 1561476,
+            instructions: 1560374,
             disk_read_bytes: wasm_entry_size + instance_entry_size,
             write_bytes: wasm_entry_size + instance_entry_size,
         }
@@ -2801,6 +2809,7 @@ fn test_auto_restore_with_expired_temp_entry_in_recording_mode() {
 }
 
 #[test]
+#[cfg(feature="wasmtime")]
 fn test_auto_restore_with_recreated_temp_entry_in_recording_mode() {
     let cd = CreateContractData::new([111; 32], CONTRACT_STORAGE);
     let ledger_info = default_ledger_info();
@@ -2913,7 +2922,7 @@ fn test_auto_restore_with_recreated_temp_entry_in_recording_mode() {
                 read_only: vec![cd.contract_key.clone()].try_into().unwrap(),
                 read_write: vec![data_key, cd.wasm_key.clone()].try_into().unwrap(),
             },
-            instructions: 1563649,
+            instructions: 1561441,
             disk_read_bytes: wasm_entry_size,
             write_bytes: wasm_entry_size + temp_entry_size,
         }

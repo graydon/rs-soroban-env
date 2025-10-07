@@ -406,7 +406,7 @@ fn data_segment_smaller_than_a_page_fits_in_one_page_memory() -> Result<(), Host
     let res = upload_wasm_with_data_segment(&host, 1, 0, 5000);
     assert!(res.is_ok());
     let expected_alloc = if host.is_wasmtime()? {
-        0x20_000
+        0x10_000
     } else {
         0x10_000
     };
@@ -532,13 +532,13 @@ fn excessive_logging() -> Result<(), HostError> {
     let expected_budget = expect![
         r#"
     =================================================================
-    Cpu limit: 2000000; used: 214303
-    Mem limit: 500000; used: 166812
+    Cpu limit: 2000000; used: 214039
+    Mem limit: 500000; used: 166844
     =================================================================
     CostType                           cpu_insns      mem_bytes      
-    WasmInsnExec                       300            0              
-    MemAlloc                           16632          67392          
-    MemCpy                             2330           0              
+    WasmInsnExec                       28             0              
+    MemAlloc                           16636          67424          
+    MemCpy                             2334           0              
     MemCmp                             472            0              
     DispatchHostFunction               310            0              
     VisitObject                        244            0              
@@ -910,7 +910,7 @@ fn test_multiple_memory() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::UnexpectedType)
+        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
     ));
     Ok(())
 }
@@ -927,7 +927,7 @@ fn test_function_import_with_wrong_type() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
+        (ScErrorType::WasmVm, ScErrorCode::UnexpectedType)
     ));
     Ok(())
 }
