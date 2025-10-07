@@ -910,7 +910,7 @@ fn test_multiple_memory() -> Result<(), HostError> {
     );
     assert!(HostError::result_matches_err(
         res,
-        (ScErrorType::WasmVm, ScErrorCode::InvalidInput)
+        (ScErrorType::WasmVm, ScErrorCode::UnexpectedType)
     ));
     Ok(())
 }

@@ -809,6 +809,9 @@ fn compute_fee_per_increment(resource_value: i64, fee_rate: i64, increment: i64)
 }
 
 #[cfg(test)]
+// We're only going to run these tests with wasmtime, as wasmi is
+// deprecated and not expected to be used in production.
+#[cfg(all(feature="wasmtime", not(feature="wasmi")))]
 mod test {
     use super::*;
     use crate::{
@@ -905,8 +908,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316637,
-                mem_bytes: 1134859,
+                instructions: 315535,
+                mem_bytes: 1134867,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -932,8 +935,8 @@ mod test {
                     ),
                 ),
                 resources: SubInvocationResources {
-                    instructions: 316637,
-                    mem_bytes: 1134859,
+                    instructions: 315535,
+                    mem_bytes: 1134867,
                     disk_read_entries: 0,
                     memory_read_entries: 3,
                     write_entries: 0,
@@ -966,8 +969,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320246,
-                mem_bytes: 1135322,
+                instructions: 318038,
+                mem_bytes: 1135338,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 1,
@@ -992,8 +995,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 315936,
-                mem_bytes: 1134707,
+                instructions: 314834,
+                mem_bytes: 1134715,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1018,8 +1021,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 322157,
-                mem_bytes: 1135678,
+                instructions: 319949,
+                mem_bytes: 1135694,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 1,
@@ -1044,8 +1047,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316476,
-                mem_bytes: 1134775,
+                instructions: 315374,
+                mem_bytes: 1134783,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1070,8 +1073,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 317701,
-                mem_bytes: 1135127,
+                instructions: 316591,
+                mem_bytes: 1135151,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1096,8 +1099,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 318103,
-                mem_bytes: 1135127,
+                instructions: 317261,
+                mem_bytes: 1135151,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1122,8 +1125,8 @@ mod test {
         assert!(res.is_err());
         expect![[r#"
             InvocationResources {
-                instructions: 317540,
-                mem_bytes: 1135195,
+                instructions: 316410,
+                mem_bytes: 1135219,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1155,8 +1158,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320711,
-                mem_bytes: 1135662,
+                instructions: 319609,
+                mem_bytes: 1135670,
                 disk_read_entries: 2,
                 memory_read_entries: 1,
                 write_entries: 2,
@@ -1187,8 +1190,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 323248,
-                mem_bytes: 1136109,
+                instructions: 322146,
+                mem_bytes: 1136117,
                 disk_read_entries: 3,
                 memory_read_entries: 0,
                 write_entries: 3,
