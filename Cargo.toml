@@ -33,14 +33,19 @@ soroban-builtin-sdk-macros = { version = "=23.0.1", path = "soroban-builtin-sdk-
 wasmparser = "=0.116.1"
 
 [workspace.dependencies.wasmtime]
-version = "37.0.1"
+version = "39.0.0"
+git = "https://github.com/bytecodealliance/wasmtime"
+rev = "c4688098204ccb3f64338ef1bbc74e72f2b6dab3"
+# path = "/src/wasmtime/crates/wasmtime"
 default-features = false
 features = ["runtime", "winch", "reexport-wasmparser"]
-# git = "https://github.com/bytecodealliance/wasmtime"
-# rev = "459dbfb33df506979fbb45e4092c510b331467f0"
 
 [workspace.dependencies.wasmtime-environ]
-version = "37.0.1"
+git = "https://github.com/bytecodealliance/wasmtime"
+rev = "c4688098204ccb3f64338ef1bbc74e72f2b6dab3"
+# path = "/src/wasmtime/crates/environ"
+version = "39.0.0"
+features = ["compile"]
 
 # NB: When updating, also update the version in rs-soroban-env dev-dependencies
 [workspace.dependencies.stellar-xdr]

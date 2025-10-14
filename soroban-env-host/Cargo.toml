@@ -92,7 +92,7 @@ default-features = false
 features = ["arbitrary"]
 
 [features]
-default = []
+default = ["wasmtime", "testutils"]
 wasmi = ["dep:wasmi", "soroban-env-common/wasmi"]
 wasmtime = ["dep:wasmtime", "dep:wasmtime-environ", "soroban-env-common/wasmtime"]
 testutils = ["soroban-env-common/testutils", "recording_mode"]
