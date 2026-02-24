@@ -127,6 +127,13 @@ bench = true
 name = "variation_histograms"
 path = "benches/variation_histograms.rs"
 
+[[bench]]
+required-features = ["bench"]
+harness = false
+bench = true
+name = "metering_probe"
+path = "benches/metering_probe.rs"
+
 [[test]]
 name = "secp256r1_sig_ver"
 path = "tests/secp256r1_sig_ver.rs"
