@@ -17,7 +17,9 @@ use crate::{
         error::HostError,
         trace::{TraceEvent, TraceRecord},
     },
+    vm::SendHost,
     Host,
+    VmContext,
 };
 
 use itertools::Itertools;
@@ -205,13 +207,15 @@ impl ObservedHost {
     #[cfg(all(not(feature = "next"), feature = "testutils"))]
     fn make_obs_hook(
         &self,
-    ) -> Rc<dyn for<'a> Fn(&'a Host, TraceEvent<'a>) -> Result<(), HostError>> {
+    ) -> Rc<
+        dyn for<'a> Fn(&'a Host, TraceEvent<'a>, VmContext<'a, SendHost>) -> Result<(), HostError>,
+    > {
         let old_obs = self.old_obs.clone();
         let new_obs = self.new_obs.clone();
         let testname = self.testname;
         let protocol = self.protocol;
-        Rc::new(move |host, evt| {
-            let tr = TraceRecord::new(host, evt).expect("observing host");
+        Rc::new(move |host, evt, vmctx| {
+            let tr = TraceRecord::new(host, evt, vmctx).expect("observing host");
             Observations::check(
                 &old_obs.borrow(),
                 &mut new_obs.borrow_mut(),

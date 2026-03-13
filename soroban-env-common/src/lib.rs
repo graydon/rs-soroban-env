@@ -82,7 +82,7 @@ mod string;
 mod symbol;
 mod tuple;
 mod val;
-mod vmcaller_env;
+mod vmcontext_env;
 
 // We have some modules that we don't re-export everything
 // from because only specific users are likely to use them.
@@ -120,7 +120,7 @@ pub use val::{Bool, Void};
 pub use compare::Compare;
 pub use convert::{Convert, TryFromVal, TryIntoVal};
 pub use env::{call_macro_with_all_host_functions, CheckedEnvArg, Env, EnvBase};
-pub use vmcaller_env::{VmCaller, VmCallerEnv};
+pub use vmcontext_env::{VmContext, VmContextEnv};
 
 pub use bytes::BytesObject;
 pub use error::Error;

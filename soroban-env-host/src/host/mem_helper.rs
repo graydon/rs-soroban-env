@@ -4,11 +4,17 @@ use crate::{
     host_object::MemHostObjectType,
     vm::SendHost,
     xdr::{ContractCostType, ScErrorCode, ScErrorType, ScSymbol},
-    Compare, Host, HostError, Symbol, SymbolObject, SymbolSmall, SymbolStr, U32Val, Vm, VmCaller,
+    Compare, Host, HostError, Symbol, SymbolObject, SymbolSmall, SymbolStr, U32Val, Vm,
+    VmContext,
 };
 
 use super::ErrorHandler;
 use std::{cmp::Ordering, rc::Rc};
+
+#[cfg(feature = "wasmi")]
+use wasmi::AsContextMut;
+#[cfg(feature = "wasmtime")]
+use wasmtime::AsContextMut;
 
 /// Helper type for host functions that receive a position and length pair and
 /// expect to operate on a VM. Pos and len are not validated and len may be a
@@ -76,112 +82,52 @@ impl Host {
 
     pub(crate) fn metered_vm_write_bytes_to_linear_memory(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        mut vmctx: VmContext<'_, SendHost>,
         vm: &Rc<Vm>,
         mem_pos: u32,
         buf: &[u8],
     ) -> Result<(), HostError> {
         self.charge_budget(ContractCostType::MemCpy, Some(buf.len() as u64))?;
-        match vmcaller {
-            #[cfg(feature = "wasmi")]
-            VmCaller::WasmiCaller(ctx) => {
-                let mem = vm.get_memory(self)?;
-                self.map_err(
-                    mem.write(ctx, mem_pos as usize, buf)
-                        .map_err(|me| wasmi::Error::Memory(me)),
-                )
-            }
-            #[cfg(feature = "wasmtime")]
-            VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_wasmtime_memory(self)?;
-                self.map_err(mem.write(ctx, mem_pos as usize, buf))
-            }
-            _ => Err(crate::Error::from_type_and_code(
-                ScErrorType::Context,
-                ScErrorCode::InternalError,
-            )
-            .into()),
+        #[cfg(feature = "wasmi")]
+        {
+            let vmctx = vmctx.try_wasmi_mut()?;
+            let mem = vm.get_wasmi_memory(self)?;
+            return self.map_err(
+                mem.write(vmctx, mem_pos as usize, buf)
+                    .map_err(|me| wasmi::Error::Memory(me)),
+            );
+        }
+        #[cfg(feature = "wasmtime")]
+        {
+            let vmctx = vmctx.try_wasmtime_mut()?;
+            let mem = vm.get_wasmtime_memory(self)?;
+            return self.map_err(mem.write(vmctx, mem_pos as usize, buf));
         }
     }
 
     pub(crate) fn metered_vm_read_bytes_from_linear_memory(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        mut vmctx: VmContext<'_, SendHost>,
         vm: &Rc<Vm>,
         mem_pos: u32,
         buf: &mut [u8],
     ) -> Result<(), HostError> {
         self.charge_budget(ContractCostType::MemCpy, Some(buf.len() as u64))?;
 
-        match vmcaller {
-            #[cfg(feature = "wasmi")]
-            VmCaller::WasmiCaller(ctx) => {
-                let mem = vm.get_memory(self)?;
-                self.map_err(
-                    mem.read(ctx, mem_pos as usize, buf)
-                        .map_err(|me| wasmi::Error::Memory(me)),
-                )
-            }
-            #[cfg(feature = "wasmtime")]
-            VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_wasmtime_memory(self)?;
-                self.map_err(mem.read(ctx, mem_pos as usize, buf))
-            }
-            _ => Err(crate::Error::from_type_and_code(
-                ScErrorType::Context,
-                ScErrorCode::InternalError,
-            )
-            .into()),
+        #[cfg(feature = "wasmi")]
+        {
+            let vmctx = vmctx.try_wasmi_mut()?;
+            let mem = vm.get_wasmi_memory(self)?;
+            return self.map_err(
+                mem.read(vmctx, mem_pos as usize, buf)
+                    .map_err(|me| wasmi::Error::Memory(me)),
+            );
         }
-    }
-
-    #[allow(clippy::needless_lifetimes)]
-    fn get_data_mut<'host, 'caller, 'vm>(
-        &'host self,
-        vmcaller: &'caller mut VmCaller<SendHost>,
-        vm: &'vm Rc<Vm>,
-    ) -> Result<&'caller mut [u8], HostError> {
-        match vmcaller {
-            #[cfg(feature = "wasmi")]
-            VmCaller::WasmiCaller(ctx) => {
-                let mem = vm.get_memory(self)?;
-                Ok(mem.data_mut(ctx))
-            }
-            #[cfg(feature = "wasmtime")]
-            VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_wasmtime_memory(self)?;
-                Ok(mem.data_mut(ctx))
-            }
-            _ => Err(crate::Error::from_type_and_code(
-                ScErrorType::Context,
-                ScErrorCode::InternalError,
-            )
-            .into()),
-        }
-    }
-
-    #[allow(clippy::needless_lifetimes)]
-    fn get_data<'host, 'caller, 'vm>(
-        &'host self,
-        vmcaller: &'caller VmCaller<SendHost>,
-        vm: &'vm Rc<Vm>,
-    ) -> Result<&'caller [u8], HostError> {
-        match vmcaller {
-            #[cfg(feature = "wasmi")]
-            VmCaller::WasmiCaller(ctx) => {
-                let mem = vm.get_memory(self)?;
-                Ok(mem.data(ctx))
-            }
-            #[cfg(feature = "wasmtime")]
-            VmCaller::WasmtimeCaller(ctx) => {
-                let mem = vm.get_wasmtime_memory(self)?;
-                Ok(mem.data(ctx))
-            }
-            _ => Err(crate::Error::from_type_and_code(
-                ScErrorType::Context,
-                ScErrorCode::InternalError,
-            )
-            .into()),
+        #[cfg(feature = "wasmtime")]
+        {
+            let vmctx = vmctx.try_wasmtime_mut()?;
+            let mem = vm.get_wasmtime_memory(self)?;
+            return self.map_err(mem.read(vmctx, mem_pos as usize, buf));
         }
     }
 
@@ -190,7 +136,7 @@ impl Host {
     // closure and must be metered in the closure at the caller side.
     pub(crate) fn metered_vm_write_vals_to_linear_memory<const VAL_SZ: usize, VAL>(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        mut vmctx: VmContext<'_, SendHost>,
         vm: &Rc<Vm>,
         mem_pos: u32,
         buf: &[VAL],
@@ -207,7 +153,20 @@ impl Host {
             .ok_or_else(|| self.err_arith_overflow())?;
         let mem_range = (mem_pos as usize)..(mem_end as usize);
 
-        let mem_data = self.get_data_mut(vmcaller, vm)?;
+        #[cfg(feature = "wasmi")]
+        let mut vmctx = vmctx.try_wasmi_mut()?;
+        #[cfg(feature = "wasmi")]
+        let mem_data = {
+            let mem = vm.get_wasmi_memory(self)?;
+            mem.data_mut(vmctx.as_context_mut())
+        };
+        #[cfg(feature = "wasmtime")]
+        let mut vmctx = vmctx.try_wasmtime_mut()?;
+        #[cfg(feature = "wasmtime")]
+        let mem_data = {
+            let mem = vm.get_wasmtime_memory(self)?;
+            mem.data_mut(vmctx.as_context_mut())
+        };
         let mem_slice = mem_data
             .get_mut(mem_range)
             .ok_or_else(|| self.err_oob_linear_memory())?;
@@ -234,7 +193,7 @@ impl Host {
     // by the closure at the caller side.
     pub(crate) fn metered_vm_read_vals_from_linear_memory<const VAL_SZ: usize, VAL>(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        mut vmctx: VmContext<'_, SendHost>,
         vm: &Rc<Vm>,
         mem_pos: u32,
         buf: &mut [VAL],
@@ -251,7 +210,20 @@ impl Host {
             .ok_or_else(|| self.err_arith_overflow())?;
         let mem_range = (mem_pos as usize)..(mem_end as usize);
 
-        let mem_data = self.get_data(vmcaller, vm)?;
+        #[cfg(feature = "wasmi")]
+        let vmctx = vmctx.try_wasmi_mut()?;
+        #[cfg(feature = "wasmi")]
+        let mem_data = {
+            let mem = vm.get_wasmi_memory(self)?;
+            mem.data(&vmctx)
+        };
+        #[cfg(feature = "wasmtime")]
+        let mut vmctx = vmctx.try_wasmtime_mut()?;
+        #[cfg(feature = "wasmtime")]
+        let mem_data = {
+            let mem = vm.get_wasmtime_memory(self)?;
+            mem.data(vmctx.as_context_mut())
+        };
         let mem_slice = mem_data
             .get(mem_range)
             .ok_or_else(|| self.err_oob_linear_memory())?;
@@ -294,13 +266,26 @@ impl Host {
     // work done on the slice needs to be metered in the closure by the caller.
     pub(crate) fn metered_vm_scan_slices_in_linear_memory(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        mut vmctx: VmContext<'_, SendHost>,
         vm: &Rc<Vm>,
         mut mem_pos: u32,
         num_slices: usize,
         mut callback: impl FnMut(usize, &[u8]) -> Result<(), HostError>,
     ) -> Result<(), HostError> {
-        let mem_data = self.get_data(vmcaller, vm)?;
+        #[cfg(feature = "wasmi")]
+        let vmctx = vmctx.try_wasmi_mut()?;
+        #[cfg(feature = "wasmi")]
+        let mem_data = {
+            let mem = vm.get_wasmi_memory(self)?;
+            mem.data(&vmctx)
+        };
+        #[cfg(feature = "wasmtime")]
+        let mut vmctx = vmctx.try_wasmtime_mut()?;
+        #[cfg(feature = "wasmtime")]
+        let mem_data = {
+            let mem = vm.get_wasmtime_memory(self)?;
+            mem.data(vmctx.as_context_mut())
+        };
         // charge the cost of copying the slices (pointers to the content, not
         // the content themselves) upfront.
         self.charge_budget(
@@ -407,7 +392,7 @@ impl Host {
 
     pub(crate) fn memobj_copy_to_linear_memory<HOT: MemHostObjectType>(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        vmctx: VmContext<'_, SendHost>,
         obj: HOT::Wrapper,
         obj_pos: U32Val,
         lm_pos: U32Val,
@@ -415,7 +400,7 @@ impl Host {
     ) -> Result<(), HostError> {
         let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(lm_pos, len)?;
         self.memobj_visit_and_copy_bytes_out::<HOT>(obj, obj_pos, len, |obj_buf| {
-            self.metered_vm_write_bytes_to_linear_memory(vmcaller, &vm, pos, obj_buf)
+            self.metered_vm_write_bytes_to_linear_memory(vmctx, &vm, pos, obj_buf)
         })
     }
 
@@ -468,7 +453,7 @@ impl Host {
 
     pub(crate) fn memobj_copy_from_linear_memory<HOT: MemHostObjectType>(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        vmctx: VmContext<'_, SendHost>,
         obj: HOT::Wrapper,
         obj_pos: U32Val,
         lm_pos: U32Val,
@@ -476,20 +461,20 @@ impl Host {
     ) -> Result<HOT::Wrapper, HostError> {
         let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(lm_pos, len)?;
         self.memobj_clone_resize_and_copy_bytes_in::<HOT>(obj, obj_pos, len, |obj_buf| {
-            self.metered_vm_read_bytes_from_linear_memory(vmcaller, &vm, pos, obj_buf)
+            self.metered_vm_read_bytes_from_linear_memory(vmctx, &vm, pos, obj_buf)
         })
     }
 
     pub(crate) fn memobj_new_from_linear_memory<HOT: MemHostObjectType>(
         &self,
-        vmcaller: &mut VmCaller<SendHost>,
+        vmctx: VmContext<'_, SendHost>,
         lm_pos: U32Val,
         len: U32Val,
     ) -> Result<HOT::Wrapper, HostError> {
         let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(lm_pos, len)?;
         self.charge_budget(ContractCostType::MemAlloc, Some(len as u64))?;
         let mut vnew: Vec<u8> = vec![0; len as usize];
-        self.metered_vm_read_bytes_from_linear_memory(vmcaller, &vm, pos, &mut vnew)?;
+        self.metered_vm_read_bytes_from_linear_memory(vmctx, &vm, pos, &mut vnew)?;
         self.add_host_object::<HOT>(HOT::try_from_bytes(self, vnew)?)
     }
 

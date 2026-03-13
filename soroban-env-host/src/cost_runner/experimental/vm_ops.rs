@@ -23,9 +23,9 @@ impl CostRunner for VmMemReadRun {
         black_box(
             sample
                 .vm
-                .with_vmcaller(|caller| {
+                .with_vmcontext(|vmctx| {
                     host.metered_vm_read_bytes_from_linear_memory(
-                        caller,
+                        vmctx,
                         &sample.vm,
                         0,
                         &mut sample.buf,
@@ -62,9 +62,9 @@ impl CostRunner for VmMemWriteRun {
         black_box(
             sample
                 .vm
-                .with_vmcaller(|caller| {
+                .with_vmcontext(|vmctx| {
                     host.metered_vm_write_bytes_to_linear_memory(
-                        caller,
+                        vmctx,
                         &sample.vm,
                         0,
                         &mut sample.buf,

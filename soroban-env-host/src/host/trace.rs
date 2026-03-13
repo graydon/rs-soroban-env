@@ -6,6 +6,8 @@ use crate::{
         metered_hash::{CountingHasher, MeteredHash, MeteredHashXdr},
         Context, Frame,
     },
+    vm::SendHost,
+    VmContext,
     Host, HostError, Val,
 };
 use std::{fmt::Debug, hash::Hasher, rc::Rc};
@@ -20,7 +22,8 @@ mod fmt;
 const TRACE_STATE_SHADOW_CPU_LIMIT_FACTOR: u64 = 5000;
 const TRACE_STATE_SHADOW_MEM_LIMIT_FACTOR: u64 = 300;
 
-pub type TraceHook = Rc<dyn for<'a> Fn(&'a Host, TraceEvent<'a>) -> Result<(), HostError>>;
+pub type TraceHook =
+    Rc<dyn for<'a> Fn(&'a Host, TraceEvent<'a>, VmContext<'a, SendHost>) -> Result<(), HostError>>;
 
 pub enum TraceEvent<'a> {
     Begin,
@@ -43,8 +46,12 @@ pub struct TraceRecord<'a> {
 }
 
 impl<'a> TraceRecord<'a> {
-    pub fn new(host: &Host, event: TraceEvent<'a>) -> Result<Self, TraceEvent<'a>> {
-        match TraceState::new(host) {
+    pub fn new(
+        host: &Host,
+        event: TraceEvent<'a>,
+        vmctx: VmContext<'a, SendHost>,
+    ) -> Result<Self, TraceEvent<'a>> {
+        match TraceState::new(host, vmctx) {
             Some(state) => Ok(Self { event, state }),
             None => Err(event),
         }
@@ -85,7 +92,7 @@ pub struct TraceState {
 }
 
 impl TraceState {
-    pub fn new(host: &Host) -> Option<Self> {
+    pub fn new(host: &Host, mut vmctx: VmContext<'_, SendHost>) -> Option<Self> {
         let budget = host.budget_ref();
         if budget
             .ensure_shadow_cpu_limit_factor(TRACE_STATE_SHADOW_CPU_LIMIT_FACTOR)
@@ -101,8 +108,9 @@ impl TraceState {
         }
         let mut state = None;
         budget.with_shadow_mode(|| {
-            let (vm_mem_hash, vm_mem_size) = host.memory_hash_and_size();
-            let (vm_exports_hash, vm_exports_size) = host.vm_exports_hash_and_size();
+            let (vm_mem_hash, vm_mem_size) = host.memory_hash_and_size(vmctx.reborrow());
+            let (vm_exports_hash, vm_exports_size) =
+                host.vm_exports_hash_and_size(vmctx.reborrow());
             let (auth_trackers_hash, auth_trackers_size) = host.auth_trackers_hash_and_size();
             state = Some(TraceState {
                 cpu_insns: host.as_budget().get_cpu_insns_consumed()?,
@@ -221,11 +229,11 @@ impl Host {
             0
         }
     }
-    fn memory_hash_and_size(&self) -> (u64, usize) {
+    fn memory_hash_and_size(&self, vmctx: VmContext<'_, SendHost>) -> (u64, usize) {
         if let Ok(ctxs) = self.0.context_stack.try_borrow() {
             if let Some(ctx) = ctxs.last() {
                 if let Frame::ContractVM { vm, .. } = &ctx.frame {
-                    if let Ok(pair) = vm.memory_hash_and_size(self.budget_ref()) {
+                    if let Ok(pair) = vm.memory_hash_and_size(self.budget_ref(), vmctx) {
                         return pair;
                     }
                 }
@@ -377,11 +385,11 @@ impl Host {
         }
     }
 
-    fn vm_exports_hash_and_size(&self) -> (u64, usize) {
+    fn vm_exports_hash_and_size(&self, vmctx: VmContext<'_, SendHost>) -> (u64, usize) {
         if let Ok(ctxs) = self.0.context_stack.try_borrow() {
             if let Some(ctx) = ctxs.last() {
                 if let Frame::ContractVM { vm, .. } = &ctx.frame {
-                    if let Ok(pair) = vm.exports_hash_and_size(self.budget_ref()) {
+                    if let Ok(pair) = vm.exports_hash_and_size(self.budget_ref(), vmctx) {
                         return pair;
                     }
                 }

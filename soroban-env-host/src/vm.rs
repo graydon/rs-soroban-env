@@ -33,6 +33,8 @@ use crate::WasmiMarshal;
 
 #[cfg(feature = "wasmtime")]
 use crate::WasmtimeMarshal;
+#[cfg(feature = "wasmtime")]
+use wasmtime::AsContextMut;
 
 /// SendHost is a wrapper type around Host. It implements `Send` using an
 /// `unsafe impl` because technically Host is not Send-safe (in the sense of
@@ -81,7 +83,7 @@ use crate::{
         metered_hash::{CountingHasher, MeteredHash},
     },
     xdr::{ContractCostType, ContractId, ScErrorCode, ScErrorType},
-    ConversionError, ErrorHandler, Host, HostError, Symbol, SymbolStr, TryIntoVal, Val,
+    ConversionError, ErrorHandler, Host, HostError, Symbol, SymbolStr, TryIntoVal, Val, VmContext,
 };
 use std::{
     cell::RefCell,
@@ -98,9 +100,6 @@ pub use module_cache::ModuleCache;
 pub use parsed_module::{
     wasm_module_memory_cost, CompilationContext, ParsedModule, VersionedContractCodeCostInputs,
 };
-
-#[cfg(feature = "wasmi")]
-use crate::VmCaller;
 
 #[cfg(feature = "wasmi")]
 impl wasmi::core::HostError for HostError {}
@@ -466,7 +465,7 @@ impl Vm {
     }
 
     #[cfg(feature = "wasmi")]
-    pub(crate) fn get_memory(&self, host: &Host) -> Result<wasmi::Memory, HostError> {
+    pub(crate) fn get_wasmi_memory(&self, host: &Host) -> Result<wasmi::Memory, HostError> {
         match self.wasmi_memory {
             Some(mem) => Ok(mem),
             None => Err(host.err(
@@ -496,7 +495,7 @@ impl Vm {
     // tranfering of the host budget / VM fuel. This is where the host->VM->host
     // boundaries are crossed.
     #[cfg(feature = "wasmi")]
-    pub(crate) fn metered_func_call(
+    pub(crate) fn metered_wasmi_func_call(
         self: &Rc<Self>,
         host: &Host,
         func_sym: &Symbol,
@@ -749,7 +748,7 @@ impl Vm {
                     .iter()
                     .map(|i| host.absolute_to_relative(*i).map(|v| v.marshal_from_self()))
                     .collect::<Result<Vec<wasmi::Value>, HostError>>()?;
-                return self.metered_func_call(
+                return self.metered_wasmi_func_call(
                     host,
                     func_sym,
                     wasm_args.as_slice(),
@@ -768,62 +767,58 @@ impl Vm {
         }
     }
 
-    /// Utility function that synthesizes a `VmCaller<SendHost>` configured to point
-    /// to this VM's `Store` and `Instance`, and calls the provided function
-    /// back with it. Mainly used for testing.
     #[cfg(feature = "wasmi")]
-    pub(crate) fn with_wasmi_vmcaller<F, T>(&self, f: F) -> Result<T, HostError>
+    pub(crate) fn with_vmcontext<F, T>(&self, f: F) -> Result<T, HostError>
     where
-        F: FnOnce(&mut VmCaller<SendHost>) -> Result<T, HostError>,
+        F: for<'a> FnOnce(VmContext<'a, SendHost>) -> Result<T, HostError>,
     {
-        let store: &mut wasmi::Store<SendHost> = &mut *self.wasmi_store.try_borrow_mut_or_err()?;
-        let mut ctx: wasmi::StoreContextMut<SendHost> = store.into();
-        let caller: wasmi::Caller<SendHost> =
-            wasmi::Caller::new(&mut ctx, Some(&self.wasmi_instance));
-        let mut vmcaller: VmCaller<SendHost> = VmCaller::WasmiCaller(caller);
-        f(&mut vmcaller)
+        if let Ok(mut store) = self.wasmi_store.try_borrow_mut_or_err() {
+            let ctx: wasmi::StoreContextMut<'_, SendHost> = (&mut *store).into();
+            f(ctx.into())
+        } else {
+            f(VmContext::AlreadyBorrowedVm)
+        }
     }
 
-    #[cfg(feature = "bench")]
-    pub(crate) fn with_caller<F, T>(&self, f: F) -> Result<T, HostError>
+    #[cfg(feature = "wasmtime")]
+    pub(crate) fn with_vmcontext<F, T>(&self, f: F) -> Result<T, HostError>
     where
-        F: FnOnce(Caller<SendHost>) -> Result<T, HostError>,
+        F: for<'a> FnOnce(VmContext<'a, SendHost>) -> Result<T, HostError>,
     {
-        let store: &mut wasmi::Store<SendHost> = &mut *self.wasmi_store.try_borrow_mut_or_err()?;
-        let mut ctx: StoreContextMut<SendHost> = store.into();
-        let caller: Caller<SendHost> = Caller::new(&mut ctx, Some(&self.wasmi_instance));
-        f(caller)
+        if let Ok(mut store) = self.wasmtime_store.try_borrow_mut_or_err() {
+            f((&mut *store).as_context_mut().into())
+        } else {
+            f(VmContext::AlreadyBorrowedVm)
+        }
     }
 
     #[cfg(feature = "wasmi")]
-    pub(crate) fn memory_hash_and_size(&self, budget: &Budget) -> Result<(u64, usize), HostError> {
+    pub(crate) fn memory_hash_and_size(
+        &self,
+        budget: &Budget,
+        mut vmctx: VmContext<'_, SendHost>,
+    ) -> Result<(u64, usize), HostError> {
         use std::hash::Hasher;
-        if let Some(mem) = self.wasmi_memory {
-            self.with_wasmi_vmcaller(|vmcaller| {
-                let mut state = CountingHasher::default();
-                let data = mem.data(vmcaller.try_ref()?);
-                data.metered_hash(&mut state, budget)?;
-                Ok((state.finish(), data.len()))
-            })
+        if let (Some(mem), VmContext::Wasmi(wasmictx)) = (self.wasmi_memory, vmctx) {
+            let mut state = CountingHasher::default();
+            let data = mem.data(&wasmictx);
+            data.metered_hash(&mut state, budget)?;
+            Ok((state.finish(), data.len()))
         } else {
             Ok((0, 0))
         }
     }
 
     #[cfg(all(feature = "wasmtime", not(feature = "wasmi")))]
-    pub(crate) fn memory_hash_and_size(&self, budget: &Budget) -> Result<(u64, usize), HostError> {
+    pub(crate) fn memory_hash_and_size(
+        &self,
+        budget: &Budget,
+        vmctx: VmContext<'_, SendHost>,
+    ) -> Result<(u64, usize), HostError> {
         use std::hash::Hasher;
-        if let Some(mem) = self.wasmtime_memory {
+        if let (Some(mem), VmContext::Wasmtime(wasmtimectx)) = (self.wasmtime_memory, vmctx) {
             let mut state = CountingHasher::default();
-            let Ok(mut store) = self.wasmtime_store.try_borrow_mut() else {
-                // FIXME wasmtime: this is in practice always an
-                // error because it's borrowed when we run the VM.
-                // we need to redesign the whole trace hook interface
-                // to take a vmcaller since we cannot cook one up
-                // for wasmtime.
-                return Ok((0, 0));
-            };
-            let data = mem.data(&mut *store);
+            let data = mem.data(wasmtimectx);
             data.metered_hash(&mut state, budget)?;
             Ok((state.finish(), data.len()))
         } else {
@@ -835,87 +830,87 @@ impl Vm {
     // wasm _exports_. There might be tables or globals a wasm doesn't export
     // but there's no obvious way to observe them.
     #[cfg(feature = "wasmi")]
-    pub(crate) fn exports_hash_and_size(&self, budget: &Budget) -> Result<(u64, usize), HostError> {
+    pub(crate) fn exports_hash_and_size(
+        &self,
+        budget: &Budget,
+        mut vmctx: VmContext<'_, SendHost>,
+    ) -> Result<(u64, usize), HostError> {
         use std::hash::Hasher;
-        use wasmi::{Extern, StoreContext};
-        self.with_wasmi_vmcaller(|vmcaller| {
-            let ctx: StoreContext<'_, _> = vmcaller.try_ref()?.into();
-            let mut size: usize = 0;
-            let mut state = CountingHasher::default();
-            for export in self.wasmi_instance.exports(vmcaller.try_ref()?) {
-                size = size.saturating_add(1);
-                export.name().metered_hash(&mut state, budget)?;
+        use wasmi::Extern;
+        let VmContext::Wasmi(wasmictx) = vmctx else {
+            return Ok((0, 0));
+        };
+        let mut size: usize = 0;
+        let mut state = CountingHasher::default();
+        for export in self.wasmi_instance.exports(&wasmictx) {
+            size = size.saturating_add(1);
+            export.name().metered_hash(&mut state, budget)?;
 
-                match export.into_extern() {
-                    // Funcs are immutable, memory we hash separately above.
-                    Extern::Func(_) | Extern::Memory(_) => (),
+            match export.into_extern() {
+                // Funcs are immutable, memory we hash separately above.
+                Extern::Func(_) | Extern::Memory(_) => (),
 
-                    Extern::Table(t) => {
-                        let sz = t.size(&ctx);
-                        sz.metered_hash(&mut state, budget)?;
-                        size = size.saturating_add(sz as usize);
-                        for i in 0..sz {
-                            if let Some(elem) = t.get(&ctx, i) {
-                                // This is a slight fudge to avoid having to
-                                // define a ton of additional MeteredHash impls
-                                // for wasmi substructures, since there is a
-                                // bounded size on the string representation of
-                                // a value, we're comfortable going temporarily
-                                // over budget here.
-                                let s = format!("{:?}", elem);
-                                budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
-                                s.metered_hash(&mut state, budget)?;
-                            }
+                Extern::Table(t) => {
+                    let sz = t.size(&wasmictx);
+                    sz.metered_hash(&mut state, budget)?;
+                    size = size.saturating_add(sz as usize);
+                    for i in 0..sz {
+                        if let Some(elem) = t.get(&wasmictx, i) {
+                            // This is a slight fudge to avoid having to
+                            // define a ton of additional MeteredHash impls
+                            // for wasmi substructures, since there is a
+                            // bounded size on the string representation of
+                            // a value, we're comfortable going temporarily
+                            // over budget here.
+                            let s = format!("{:?}", elem);
+                            budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
+                            s.metered_hash(&mut state, budget)?;
                         }
                     }
-                    Extern::Global(g) => {
-                        let s = format!("{:?}", g.get(&ctx));
-                        budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
-                        s.metered_hash(&mut state, budget)?;
-                    }
+                }
+                Extern::Global(g) => {
+                    let s = format!("{:?}", g.get(&wasmictx));
+                    budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
+                    s.metered_hash(&mut state, budget)?;
                 }
             }
-            Ok((state.finish(), size))
-        })
+        }
+        Ok((state.finish(), size))
     }
 
     #[cfg(all(feature = "wasmtime", not(feature = "wasmi")))]
     pub(crate) fn exports_hash_and_size(
         &self,
-        _budget: &Budget,
+        budget: &Budget,
+        vmctx: VmContext<'_, SendHost>,
     ) -> Result<(u64, usize), HostError> {
         use std::hash::Hasher;
         use wasmtime::Extern;
-        let Ok(mut store) = self.wasmtime_store.try_borrow_mut() else {
-            // FIXME wasmtime: this is a in practice always an
-            // error because it's borrowed when we run the VM.
-            // we need to redesign the whole trace hook interface
-            // to take a vmcaller since we cannot cook one up
-            // for wasmtime.
+        let VmContext::Wasmtime(mut wasmtimectx) = vmctx else {
             return Ok((0, 0));
         };
         let mut size: usize = 0;
         let mut state = CountingHasher::default();
         let externs: Vec<(String, wasmtime::Extern)> = {
             self.wasmtime_instance
-                .exports(&mut *store)
+                .exports(&mut wasmtimectx)
                 .map(|export| (export.name().to_string(), export.into_extern()))
                 .collect()
         };
         for (name, xtern) in externs {
             size = size.saturating_add(1);
-            name.metered_hash(&mut state, _budget)?;
+            name.metered_hash(&mut state, budget)?;
             match xtern {
                 Extern::Func(_) | Extern::Memory(_) | Extern::SharedMemory(_) | Extern::Tag(_) => {
                     ()
                 }
 
                 Extern::Table(t) => {
-                    let sz = t.size(&mut *store);
-                    sz.metered_hash(&mut state, _budget)?;
+                    let sz = t.size(&mut wasmtimectx);
+                    sz.metered_hash(&mut state, budget)?;
                     size = size.saturating_add(sz as usize);
                     for i in 0..sz {
-                        if let Some(elem) = t.get(&mut *store, i) {
+                        if let Some(elem) = t.get(&mut wasmtimectx, i) {
                             // This is a slight fudge to avoid having to
                             // define a ton of additional MeteredHash impls
                             // for wasmtime substructures, since there is a
@@ -923,15 +918,15 @@ impl Vm {
                             // a value, we're comfortable going temporarily
                             // over budget here.
                             let s = format!("{:?}", elem);
-                            _budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
-                            s.metered_hash(&mut state, _budget)?;
+                            budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
+                            s.metered_hash(&mut state, budget)?;
                         }
                     }
                 }
                 Extern::Global(g) => {
-                    let s = format!("{:?}", g.get(&mut *store));
-                    _budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
-                    s.metered_hash(&mut state, _budget)?;
+                    let s = format!("{:?}", g.get(&mut wasmtimectx));
+                    budget.charge(ContractCostType::MemAlloc, Some(s.len() as u64))?;
+                    s.metered_hash(&mut state, budget)?;
                 }
             }
         }

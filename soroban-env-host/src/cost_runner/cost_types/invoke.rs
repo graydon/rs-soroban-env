@@ -64,7 +64,9 @@ impl CostRunner for InvokeHostFunctionRun {
     fn run_iter(_host: &crate::Host, _iter: u64, sample: Self::SampleType) -> Self::RecycledType {
         black_box(
             sample
-                .with_caller(|caller| dummy0(caller).map_err(|_| HostError::from(ConversionError)))
+                .with_vmcontext(|mut vmctx| {
+                    dummy0(vmctx).map_err(|_| HostError::from(ConversionError))
+                })
                 .unwrap(),
         );
         black_box(sample)

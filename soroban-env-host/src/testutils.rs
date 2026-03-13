@@ -530,7 +530,7 @@ impl Host {
         if std::env::var("EXCLUDE_VM_INSTANTIATION").is_ok() {
             let ht2 = ht.clone();
             let budget2 = budget.clone();
-            self.set_trace_hook(Some(Rc::new(move |_, evt| {
+            self.set_trace_hook(Some(Rc::new(move |_, evt, _vmctx| {
                 if let TraceEvent::PushCtx(_) = evt {
                     budget2.reset_unlimited()?;
                     ht2.borrow_mut().start(None);

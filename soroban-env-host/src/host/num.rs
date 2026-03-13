@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! impl_wrapping_obj_from_num {
     ($host_fn: ident, $hot: ty, $obj: ty, $num: ty) => {
-        fn $host_fn(&self, _vmcaller: &mut VmCaller<SendHost>, u: $num) -> Result<$obj, HostError> {
+        fn $host_fn(&self, _vmctx: VmContext<Self::VmUserState>, u: $num) -> Result<$obj, HostError> {
             self.add_host_object(<$hot>::from(u))
         }
     };
@@ -12,7 +12,7 @@ macro_rules! impl_wrapping_obj_to_num {
     ($host_fn: ident, $data: ty, $obj: ty, $num: ty) => {
         fn $host_fn(
             &self,
-            _vmcaller: &mut VmCaller<SendHost>,
+            _vmctx: VmContext<Self::VmUserState>,
             obj: $obj,
         ) -> Result<$num, HostError> {
             self.visit_obj(obj, |t: &$data| Ok(t.metered_clone(self)?.into()))
@@ -32,7 +32,7 @@ macro_rules! impl_bignum_host_fns {
     ($host_fn: ident, $method: ident, $num: ty, $valty: ty, $operand_valty: ty, $cost: ident) => {
         fn $host_fn(
             &self,
-            _vmcaller: &mut VmCaller<Self::VmUserState>,
+            _vmctx: VmContext<Self::VmUserState>,
             lhs_val: $valty,
             rhs_val: $operand_valty,
         ) -> Result<$valty, Self::Error> {
@@ -54,7 +54,7 @@ macro_rules! impl_bignum_host_fns {
     ($host_fn: ident, $method: ident, $num: ty, $valty: ty, $operand_valty: ty, $cost: ident, checked) => {
         fn $host_fn(
             &self,
-            _vmcaller: &mut VmCaller<Self::VmUserState>,
+            _vmctx: VmContext<Self::VmUserState>,
             lhs_val: $valty,
             rhs_val: $operand_valty,
         ) -> Result<Val, Self::Error> {
@@ -78,7 +78,7 @@ macro_rules! impl_bls12_381_fr_arith_host_fns {
     ($host_fn: ident, $method: ident) => {
         fn $host_fn(
             &self,
-            _vmcaller: &mut VmCaller<Self::VmUserState>,
+            _vmctx: VmContext<Self::VmUserState>,
             lhs: U256Val,
             rhs: U256Val,
         ) -> Result<U256Val, Self::Error> {
@@ -95,7 +95,7 @@ macro_rules! impl_bn254_fr_arith_host_fns {
     ($host_fn: ident, $method: ident) => {
         fn $host_fn(
             &self,
-            _vmcaller: &mut VmCaller<Self::VmUserState>,
+            _vmctx: VmContext<Self::VmUserState>,
             lhs: U256Val,
             rhs: U256Val,
         ) -> Result<U256Val, Self::Error> {
