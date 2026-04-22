@@ -431,6 +431,25 @@ impl Compare<LedgerKey> for Budget {
     }
 }
 
+// Lazy XDR comparison: LazyLedgerKey implements Ord natively (discriminant-based
+// lazy comparison). We charge MemCmp for the XDR byte length as an approximate
+// upper bound on comparison cost.
+impl Compare<crate::xdr::LazyLedgerKey> for Budget {
+    type Error = HostError;
+
+    fn compare(
+        &self,
+        a: &crate::xdr::LazyLedgerKey,
+        b: &crate::xdr::LazyLedgerKey,
+    ) -> Result<Ordering, Self::Error> {
+        self.charge(
+            ContractCostType::MemCmp,
+            Some(core::cmp::max(a.as_ref().len(), b.as_ref().len()) as u64),
+        )?;
+        Ok(a.cmp(b))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

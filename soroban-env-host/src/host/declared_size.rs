@@ -184,6 +184,13 @@ impl_declared_size_type!(InvokeContractArgs, 96);
 impl_declared_size_type!(ContractIdPreimage, 80);
 impl_declared_size_type!(ContractDataDurability, 4);
 
+// Lazy XDR types: LazyHandle is Arc<[u8]> (16) + u32 pos + u32 len = 24 bytes.
+// All lazy wrapper types are #[repr(transparent)] newtypes around LazyHandle.
+impl_declared_size_type!(crate::xdr::LazyHandle, 24);
+impl_declared_size_type!(crate::xdr::LazyLedgerKey, 24);
+impl_declared_size_type!(crate::xdr::LazyLedgerEntry, 24);
+impl_declared_size_type!(crate::xdr::LazyTtlEntry, 24);
+
 // NB: ExtensionPoint is a 1-variant enum with no payload, which Rust optimizes
 // to take zero bytes of memory -- but in XDR it's a 4-byte type like any other
 // union.

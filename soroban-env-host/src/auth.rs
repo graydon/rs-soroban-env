@@ -160,11 +160,13 @@ use crate::{
         Frame,
     },
     host_object::HostVec,
+    storage,
     xdr::{
         ContractDataEntry, CreateContractArgsV2, HashIdPreimage,
         HashIdPreimageSorobanAuthorization, InvokeContractArgs, LedgerEntry, LedgerEntryData,
-        LedgerEntryExt, ScAddress, ScErrorCode, ScErrorType, ScNonceKey, ScVal,
-        SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanCredentials,
+        LedgerEntryExt, LedgerKey, LedgerKeyContractData, ScAddress, ScErrorCode, ScErrorType,
+        ScNonceKey, ScVal, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
+        SorobanCredentials,
     },
     AddressObject, Compare, Host, HostError, Symbol, TryFromVal, TryIntoVal, Val, VecObject,
 };
@@ -2284,11 +2286,11 @@ impl Host {
     ) -> Result<(), HostError> {
         let nonce_key_scval = ScVal::LedgerKeyNonce(ScNonceKey { nonce });
         let sc_address = self.scaddress_from_address(address)?;
-        let nonce_key = self.storage_key_for_address(
-            sc_address.metered_clone(self)?,
-            nonce_key_scval.metered_clone(self)?,
-            xdr::ContractDataDurability::Temporary,
-        )?;
+        let nonce_key = storage::to_lazy_key(&LedgerKey::ContractData(LedgerKeyContractData {
+            contract: sc_address.metered_clone(self)?,
+            key: nonce_key_scval.metered_clone(self)?,
+            durability: xdr::ContractDataDurability::Temporary,
+        }))?;
         let live_until_ledger = live_until_ledger
             .max(self.get_min_live_until_ledger(xdr::ContractDataDurability::Temporary)?);
         self.with_mut_storage(|storage| {
@@ -2326,7 +2328,7 @@ impl Host {
             };
             storage.put(
                 &nonce_key,
-                &Rc::metered_new(entry, self)?,
+                &storage::to_lazy_entry(&entry)?,
                 Some(live_until_ledger),
                 self,
                 None,

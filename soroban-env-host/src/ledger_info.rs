@@ -37,3 +37,15 @@ pub fn get_key_durability(key: &LedgerKey) -> Option<ContractDataDurability> {
         _ => None,
     }
 }
+
+pub fn get_lazy_key_durability(
+    key: &crate::xdr::LazyLedgerKey,
+) -> Option<ContractDataDurability> {
+    if let Some(cd) = key.as_contract_data() {
+        Some(cd.durability())
+    } else if key.as_contract_code().is_some() {
+        Some(ContractDataDurability::Persistent)
+    } else {
+        None
+    }
+}

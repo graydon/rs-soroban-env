@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::{
     builtin_contracts::{
         base_types::{Address, BytesN},
@@ -11,13 +9,13 @@ use crate::{
         },
     },
     err,
-    host::metered_clone::{MeteredAlloc, MeteredClone},
-    storage::Storage,
+    host::metered_clone::MeteredClone,
+    storage::{self, Storage},
     xdr::{
         AccountEntry, AccountEntryExt, AccountEntryExtensionV1Ext, AccountFlags, AccountId, Asset,
-        LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, ScAddress, ScErrorCode,
-        ScErrorType, SequenceNumber, Thresholds, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
-        TrustLineFlags,
+        LazyLedgerEntry, LazyLedgerKey, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
+        ScAddress, ScErrorCode, ScErrorType, SequenceNumber, Thresholds, TrustLineAsset,
+        TrustLineEntry, TrustLineEntryExt, TrustLineFlags,
     },
     Env, ErrorHandler, Host, HostError, StorageType, TryIntoVal,
 };
@@ -443,7 +441,8 @@ fn transfer_account_balance(
         let existing_entry = storage.try_get(&lk, host, None)?;
 
         match existing_entry {
-            Some(le) => {
+            Some(lazy_le) => {
+                let le = storage::from_lazy_entry(&lazy_le)?;
                 // Account exists - update the balance
                 let mut ae = match &le.data {
                     LedgerEntryData::Account(ae) => Ok(ae.metered_clone(host)?),
@@ -532,13 +531,12 @@ fn transfer_account_balance(
                     ext: AccountEntryExt::V0,
                 };
 
-                let new_le = Rc::metered_new(
-                    LedgerEntry {
+                let new_le = storage::to_lazy_entry(
+                    &LedgerEntry {
                         last_modified_ledger_seq: 0,
                         data: LedgerEntryData::Account(new_account),
                         ext: LedgerEntryExt::V0,
                     },
-                    host,
                 )?;
 
                 storage.put(&lk, &new_le, None, host, None)
@@ -550,9 +548,9 @@ fn transfer_account_balance(
 fn read_account_entry(
     host: &Host,
     storage: &mut Storage,
-    lk: &Rc<LedgerKey>,
+    lk: &LazyLedgerKey,
     addr: &Address,
-) -> Result<Rc<LedgerEntry>, HostError> {
+) -> Result<LazyLedgerEntry, HostError> {
     storage.try_get(&lk, &host, None)?.ok_or_else(|| {
         host.error(
             ContractError::AccountMissingError.into(),
@@ -565,17 +563,27 @@ fn read_account_entry(
 fn read_trustline_entry(
     host: &Host,
     storage: &mut Storage,
-    lk: &Rc<LedgerKey>,
-) -> Result<Rc<LedgerEntry>, HostError> {
+    lk: &LazyLedgerKey,
+) -> Result<LazyLedgerEntry, HostError> {
     storage.try_get(&lk, &host, None)?.ok_or_else(|| {
-        let account_address = host.account_address_from_key(lk);
-        match account_address {
-            Ok(account_address) => host.error(
+        let eager_key = LedgerKey::try_from(lk);
+        match eager_key {
+            Ok(ref ek) => {
+                let account_address = host.account_address_from_key(ek);
+                match account_address {
+                    Ok(account_address) => host.error(
+                        ContractError::TrustlineMissingError.into(),
+                        "trustline entry is missing for account",
+                        &[account_address],
+                    ),
+                    Err(e) => e,
+                }
+            }
+            Err(_) => host.error(
                 ContractError::TrustlineMissingError.into(),
-                "trustline entry is missing for account",
-                &[account_address],
+                "trustline entry is missing",
+                &[],
             ),
-            Err(e) => e,
         }
     })
 }
@@ -589,7 +597,8 @@ fn transfer_trustline_balance(
 ) -> Result<(), HostError> {
     let lk = host.to_trustline_key(account_id, asset)?;
     host.with_mut_storage(|storage| {
-        let mut le = read_trustline_entry(host, storage, &lk)?;
+        let lazy_le = read_trustline_entry(host, storage, &lk)?;
+        let le = storage::from_lazy_entry(&lazy_le)?;
 
         let mut tl = match &le.data {
             LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
@@ -612,8 +621,8 @@ fn transfer_trustline_balance(
         };
         if new_balance >= min_balance && new_balance <= max_balance {
             tl.balance = new_balance;
-            le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
-            storage.put(&lk, &le, None, &host, None)
+            let updated_le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
+            storage.put(&lk, &updated_le, None, &host, None)
         } else {
             Err(err!(
                 host,
@@ -636,7 +645,8 @@ fn get_account_balance(
     let lk = host.to_account_key(account_id)?;
 
     host.with_mut_storage(|storage| {
-        let le = read_account_entry(host, storage, &lk, &addr)?;
+        let lazy_le = read_account_entry(host, storage, &lk, &addr)?;
+        let le = storage::from_lazy_entry(&lazy_le)?;
 
         let ae = match &le.data {
             LedgerEntryData::Account(ae) => Ok(ae),
@@ -719,7 +729,8 @@ fn get_trustline_balance(
 ) -> Result<i64, HostError> {
     let lk = host.to_trustline_key(account_id, asset)?;
     host.with_mut_storage(|storage| {
-        let le = read_trustline_entry(host, storage, &lk)?;
+        let lazy_le = read_trustline_entry(host, storage, &lk)?;
+        let le = storage::from_lazy_entry(&lazy_le)?;
 
         let tl = match &le.data {
             LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
@@ -815,7 +826,8 @@ fn get_trustline_flags(
 ) -> Result<u32, HostError> {
     let lk = host.to_trustline_key(account_id, asset)?;
     host.with_mut_storage(|storage| {
-        let le = read_trustline_entry(host, storage, &lk)?;
+        let lazy_le = read_trustline_entry(host, storage, &lk)?;
+        let le = storage::from_lazy_entry(&lazy_le)?;
 
         let tl = match &le.data {
             LedgerEntryData::Trustline(tl) => Ok(tl),
@@ -883,7 +895,8 @@ fn set_trustline_authorization(
 ) -> Result<(), HostError> {
     let lk = host.to_trustline_key(account_id, asset)?;
     host.with_mut_storage(|storage| {
-        let mut le = read_trustline_entry(host, storage, &lk)?;
+        let lazy_le = read_trustline_entry(host, storage, &lk)?;
+        let le = storage::from_lazy_entry(&lazy_le)?;
 
         let mut tl = match &le.data {
             LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
@@ -909,8 +922,8 @@ fn set_trustline_authorization(
             tl.flags &= !(TrustLineFlags::AuthorizedFlag as u32);
             tl.flags |= TrustLineFlags::AuthorizedToMaintainLiabilitiesFlag as u32;
         }
-        le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
-        storage.put(&lk, &le, None, &host, None)
+        let updated_le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
+        storage.put(&lk, &updated_le, None, &host, None)
     })
 }
 
@@ -1016,13 +1029,14 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
     let acc_key = e.to_account_key(account_id.metered_clone(e)?)?;
     // Load the account to check sub-entry limit and reserve, then create trustline
     e.with_mut_storage(|storage| {
-        let acc_entry = storage.try_get(&acc_key, e, None)?.ok_or_else(|| {
+        let lazy_acc_entry = storage.try_get(&acc_key, e, None)?.ok_or_else(|| {
             e.error(
                 ContractError::AccountMissingError.into(),
                 "account entry is missing",
                 &[addr.as_object().to_val()],
             )
         })?;
+        let acc_entry = storage::from_lazy_entry(&lazy_acc_entry)?;
 
         let mut ae = match &acc_entry.data {
             LedgerEntryData::Account(ae) => ae.metered_clone(e)?,
@@ -1066,13 +1080,12 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
             ext: TrustLineEntryExt::V0,
         };
 
-        let tl_ledger_entry = Rc::metered_new(
-            LedgerEntry {
+        let tl_ledger_entry = storage::to_lazy_entry(
+            &LedgerEntry {
                 last_modified_ledger_seq: 0,
                 data: LedgerEntryData::Trustline(trustline_entry),
                 ext: LedgerEntryExt::V0,
             },
-            e,
         )?;
 
         // Increment account's num_sub_entries

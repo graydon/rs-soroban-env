@@ -1,19 +1,19 @@
 use core::cmp::min;
-use std::rc::Rc;
 
 use crate::{
     budget::AsBudget,
     err,
-    host::metered_clone::{MeteredAlloc, MeteredClone},
-    storage::{InstanceStorageMap, Storage},
+    host::metered_clone::MeteredClone,
+    storage::{self, InstanceStorageMap, Storage},
     vm::VersionedContractCodeCostInputs,
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeEntry, ContractDataDurability,
         ContractDataEntry, ContractExecutable, ContractId, ContractIdPreimage, ExtensionPoint,
-        Hash, HashIdPreimage, HashIdPreimageContractId, LedgerEntry, LedgerEntryData,
-        LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData,
-        LedgerKeyTrustLine, PublicKey, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
-        ScMap, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
+        Hash, HashIdPreimage, HashIdPreimageContractId, LazyLedgerEntry, LazyLedgerKey, LedgerEntry,
+        LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
+        LedgerKeyContractData, LedgerKeyTrustLine, PublicKey, ScAddress, ScContractInstance,
+        ScErrorCode, ScErrorType, ScMap, ScVal, Signer, SignerKey, ThresholdIndexes,
+        TrustLineAsset, Uint256,
     },
     AddressObject, Env, ErrorHandler, Host, HostError, StorageType, U32Val, Val,
 };
@@ -75,16 +75,14 @@ impl Host {
     pub(crate) fn contract_instance_ledger_key(
         &self,
         contract_id: &ContractId,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LazyLedgerKey, HostError> {
         let contract_id = contract_id.metered_clone(self)?;
-        Rc::metered_new(
-            LedgerKey::ContractData(LedgerKeyContractData {
-                key: ScVal::LedgerKeyContractInstance,
-                durability: ContractDataDurability::Persistent,
-                contract: ScAddress::Contract(contract_id),
-            }),
-            self,
-        )
+        let eager = LedgerKey::ContractData(LedgerKeyContractData {
+            key: ScVal::LedgerKeyContractInstance,
+            durability: ContractDataDurability::Persistent,
+            contract: ScAddress::Contract(contract_id),
+        });
+        storage::to_lazy_key(&eager)
     }
 
     pub(crate) fn extract_contract_instance_from_ledger_entry(
@@ -113,21 +111,20 @@ impl Host {
     // Notes on metering: retrieving from storage covered. Rest are free.
     pub(crate) fn retrieve_contract_instance_from_storage(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
     ) -> Result<ScContractInstance, HostError> {
-        let entry = self.try_borrow_storage_mut()?.get(key, self, None)?;
+        let lazy_entry = self.try_borrow_storage_mut()?.get(key, self, None)?;
+        let entry = storage::from_lazy_entry(&lazy_entry)?;
         self.extract_contract_instance_from_ledger_entry(&entry)
     }
 
     pub(crate) fn contract_code_ledger_key(
         &self,
         wasm_hash: &Hash,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LazyLedgerKey, HostError> {
         let wasm_hash = wasm_hash.metered_clone(self)?;
-        Rc::metered_new(
-            LedgerKey::ContractCode(LedgerKeyContractCode { hash: wasm_hash }),
-            self,
-        )
+        let eager = LedgerKey::ContractCode(LedgerKeyContractCode { hash: wasm_hash });
+        storage::to_lazy_key(&eager)
     }
 
     pub(crate) fn retrieve_wasm_from_storage(
@@ -135,7 +132,9 @@ impl Host {
         wasm_hash: &Hash,
     ) -> Result<(BytesM, VersionedContractCodeCostInputs), HostError> {
         let key = self.contract_code_ledger_key(wasm_hash)?;
-        match &self.try_borrow_storage_mut()?.get(&key, self, None)?.data {
+        let lazy_entry = self.try_borrow_storage_mut()?.get(&key, self, None)?;
+        let entry = storage::from_lazy_entry(&lazy_entry)?;
+        match &entry.data {
             LedgerEntryData::ContractCode(e) => {
                 let code = e.code.metered_clone(self)?;
                 let costs = match &e.ext {
@@ -175,13 +174,13 @@ impl Host {
         executable: Option<ContractExecutable>,
         instance_storage: Option<ScMap>,
         contract_id: ContractId,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
     ) -> Result<(), HostError> {
         if self.try_borrow_storage_mut()?.has(key, self, None)? {
-            let (current, live_until_ledger) = self
+            let (lazy_current, live_until_ledger) = self
                 .try_borrow_storage_mut()?
                 .get_with_live_until_ledger(key, self, None)?;
-            let mut current = (*current).metered_clone(self)?;
+            let mut current = storage::from_lazy_entry(&lazy_current)?;
 
             if let LedgerEntryData::ContractData(ref mut entry) = current.data {
                 if let ScVal::ContractInstance(ref mut instance) = entry.val {
@@ -209,8 +208,8 @@ impl Host {
             }
 
             self.try_borrow_storage_mut()?.put(
-                &key,
-                &Rc::metered_new(current, self)?,
+                key,
+                &storage::to_lazy_entry(&current)?,
                 live_until_ledger,
                 self,
                 None,
@@ -246,7 +245,7 @@ impl Host {
 
     pub(crate) fn extend_contract_code_ttl_from_contract_id(
         &self,
-        instance_key: Rc<LedgerKey>,
+        instance_key: LazyLedgerKey,
         threshold: u32,
         extend_to: u32,
     ) -> Result<(), HostError> {
@@ -266,13 +265,13 @@ impl Host {
 
     pub(crate) fn extend_contract_instance_ttl_from_contract_id(
         &self,
-        instance_key: Rc<LedgerKey>,
+        instance_key: LazyLedgerKey,
         threshold: u32,
         extend_to: u32,
     ) -> Result<(), HostError> {
         self.try_borrow_storage_mut()?.extend_ttl(
             self,
-            instance_key.metered_clone(self)?,
+            instance_key.clone(),
             threshold,
             extend_to,
             None,
@@ -282,7 +281,7 @@ impl Host {
 
     pub(crate) fn extend_contract_code_ttl_v2(
         &self,
-        instance_key: &Rc<LedgerKey>,
+        instance_key: &LazyLedgerKey,
         extend_to: u32,
         min_extension: u32,
         max_extension: u32,
@@ -309,7 +308,7 @@ impl Host {
 
     pub(crate) fn extend_contract_instance_ttl_v2(
         &self,
-        instance_key: Rc<LedgerKey>,
+        instance_key: LazyLedgerKey,
         extend_to: u32,
         min_extension: u32,
         max_extension: u32,
@@ -340,19 +339,24 @@ impl Host {
     // notes on metering: `get` from storage is covered. Rest are free.
     pub(crate) fn load_account(&self, account_id: AccountId) -> Result<AccountEntry, HostError> {
         let acc = self.to_account_key(account_id)?;
-        self.with_mut_storage(|storage| match &storage.get(&acc, self, None)?.data {
-            LedgerEntryData::Account(ae) => ae.metered_clone(self),
-            e => Err(err!(
-                self,
-                (ScErrorType::Storage, ScErrorCode::InternalError),
-                "ledger entry is not account",
-                e.name()
-            )),
+        self.with_mut_storage(|storage| {
+            let lazy_entry = storage.get(&acc, self, None)?;
+            let entry = storage::from_lazy_entry(&lazy_entry)?;
+            match &entry.data {
+                LedgerEntryData::Account(ae) => ae.metered_clone(self),
+                e => Err(err!(
+                    self,
+                    (ScErrorType::Storage, ScErrorCode::InternalError),
+                    "ledger entry is not account",
+                    e.name()
+                )),
+            }
         })
     }
 
-    pub(crate) fn to_account_key(&self, account_id: AccountId) -> Result<Rc<LedgerKey>, HostError> {
-        Rc::metered_new(LedgerKey::Account(LedgerKeyAccount { account_id }), self)
+    pub(crate) fn to_account_key(&self, account_id: AccountId) -> Result<LazyLedgerKey, HostError> {
+        let eager = LedgerKey::Account(LedgerKeyAccount { account_id });
+        storage::to_lazy_key(&eager)
     }
 
     pub(crate) fn create_asset_4(&self, asset_code: [u8; 4], issuer: AccountId) -> Asset {
@@ -375,11 +379,9 @@ impl Host {
         &self,
         account_id: AccountId,
         asset: TrustLineAsset,
-    ) -> Result<Rc<LedgerKey>, HostError> {
-        Rc::metered_new(
-            LedgerKey::Trustline(LedgerKeyTrustLine { account_id, asset }),
-            self,
-        )
+    ) -> Result<LazyLedgerKey, HostError> {
+        let eager = LedgerKey::Trustline(LedgerKeyTrustLine { account_id, asset });
+        storage::to_lazy_key(&eager)
     }
 
     pub(crate) fn get_signer_weight_from_account(
@@ -436,50 +438,44 @@ impl Host {
     pub(crate) fn new_contract_data(
         &self,
         data: ContractDataEntry,
-    ) -> Result<Rc<LedgerEntry>, HostError> {
-        Rc::metered_new(
-            LedgerEntry {
-                // This is modified to the appropriate value on the core side during
-                // commiting the ledger transaction.
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(data),
-                ext: LedgerEntryExt::V0,
-            },
-            self,
-        )
+    ) -> Result<LazyLedgerEntry, HostError> {
+        let eager = LedgerEntry {
+            // This is modified to the appropriate value on the core side during
+            // commiting the ledger transaction.
+            last_modified_ledger_seq: 0,
+            data: LedgerEntryData::ContractData(data),
+            ext: LedgerEntryExt::V0,
+        };
+        storage::to_lazy_entry(&eager)
     }
 
     pub(crate) fn new_contract_code(
         &self,
         data: ContractCodeEntry,
-    ) -> Result<Rc<LedgerEntry>, HostError> {
-        Rc::metered_new(
-            LedgerEntry {
-                // This is modified to the appropriate value on the core side during
-                // commiting the ledger transaction.
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractCode(data),
-                ext: LedgerEntryExt::V0,
-            },
-            self,
-        )
+    ) -> Result<LazyLedgerEntry, HostError> {
+        let eager = LedgerEntry {
+            // This is modified to the appropriate value on the core side during
+            // commiting the ledger transaction.
+            last_modified_ledger_seq: 0,
+            data: LedgerEntryData::ContractCode(data),
+            ext: LedgerEntryExt::V0,
+        };
+        storage::to_lazy_entry(&eager)
     }
 
     pub(crate) fn modify_ledger_entry_data(
         &self,
         original_entry: &LedgerEntry,
         new_data: LedgerEntryData,
-    ) -> Result<Rc<LedgerEntry>, HostError> {
-        Rc::metered_new(
-            LedgerEntry {
-                // This is modified to the appropriate value on the core side during
-                // commiting the ledger transaction.
-                last_modified_ledger_seq: 0,
-                data: new_data,
-                ext: original_entry.ext.metered_clone(self)?,
-            },
-            self,
-        )
+    ) -> Result<LazyLedgerEntry, HostError> {
+        let eager = LedgerEntry {
+            // This is modified to the appropriate value on the core side during
+            // commiting the ledger transaction.
+            last_modified_ledger_seq: 0,
+            data: new_data,
+            ext: original_entry.ext.metered_clone(self)?,
+        };
+        storage::to_lazy_entry(&eager)
     }
 
     pub(crate) fn contract_id_from_scaddress(
@@ -513,16 +509,16 @@ impl Host {
         t: StorageType,
     ) -> Result<(), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
-        let key = self.storage_key_from_val(k, durability)?;
+        let lazy_key = self.storage_key_from_val(k, durability)?;
         // Currently the storage stores the whole ledger entries, while this
         // operation might only modify the internal `ScVal` value. Thus we
         // need to only overwrite the value in case if there is already an
         // existing ledger entry value for the key in the storage.
-        if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
-            let (current, live_until_ledger) = self
+        if self.try_borrow_storage_mut()?.has(&lazy_key, self, Some(k))? {
+            let (lazy_current, live_until_ledger) = self
                 .try_borrow_storage_mut()?
-                .get_with_live_until_ledger(&key, self, Some(k))?;
-            let mut current = (*current).metered_clone(self)?;
+                .get_with_live_until_ledger(&lazy_key, self, Some(k))?;
+            let mut current = storage::from_lazy_entry(&lazy_current)?;
             match current.data {
                 LedgerEntryData::ContractData(ref mut entry) => {
                     entry.val = self.from_host_val(v)?;
@@ -537,8 +533,8 @@ impl Host {
                 }
             }
             self.try_borrow_storage_mut()?.put(
-                &key,
-                &Rc::metered_new(current, self)?,
+                &lazy_key,
+                &storage::to_lazy_entry(&current)?,
                 live_until_ledger,
                 self,
                 Some(k),
@@ -552,7 +548,7 @@ impl Host {
                 ext: ExtensionPoint::V0,
             };
             self.try_borrow_storage_mut()?.put(
-                &key,
+                &lazy_key,
                 &Host::new_contract_data(self, data)?,
                 Some(self.get_min_live_until_ledger(durability)?),
                 self,
@@ -574,8 +570,8 @@ impl Host {
     /// Writes an arbitrary ledger entry to storage.
     pub fn add_ledger_entry(
         &self,
-        key: &Rc<LedgerKey>,
-        val: &Rc<soroban_env_common::xdr::LedgerEntry>,
+        key: &LazyLedgerKey,
+        val: &LazyLedgerEntry,
         live_until_ledger: Option<u32>,
     ) -> Result<(), HostError> {
         self.with_mut_storage(|storage| storage.put(key, val, live_until_ledger, self, None))
@@ -586,7 +582,7 @@ impl Host {
     /// Returns `None` if the entry does not exist.
     pub fn get_ledger_entry(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
         self.with_mut_storage(|storage| storage.try_get_full(key, self, None))
     }
@@ -595,7 +591,7 @@ impl Host {
     #[allow(clippy::type_complexity)]
     pub fn get_stored_entries(
         &self,
-    ) -> Result<Vec<(Rc<LedgerKey>, Option<EntryWithLiveUntil>)>, HostError> {
+    ) -> Result<Vec<(LazyLedgerKey, Option<EntryWithLiveUntil>)>, HostError> {
         self.with_mut_storage(|storage| Ok(storage.map.map.clone()))
     }
 
@@ -603,8 +599,8 @@ impl Host {
     // enforcing storage mode.
     pub fn setup_storage_entry(
         &self,
-        key: Rc<LedgerKey>,
-        val: Option<(Rc<soroban_env_common::xdr::LedgerEntry>, Option<u32>)>,
+        key: LazyLedgerKey,
+        val: Option<(LazyLedgerEntry, Option<u32>)>,
         access_type: AccessType,
     ) -> Result<(), HostError> {
         self.with_mut_storage(|storage| {

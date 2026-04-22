@@ -10,7 +10,7 @@ use crate::{
     impl_bignum_host_fns, impl_bls12_381_fr_arith_host_fns, impl_bn254_fr_arith_host_fns,
     impl_wrapping_obj_from_num, impl_wrapping_obj_to_num,
     num::*,
-    storage::Storage,
+    storage::{self, Storage},
     vm::ModuleCache,
     xdr::{
         int128_helpers, AccountId, Asset, ContractCostType, ContractEventType, ContractExecutable,
@@ -2237,7 +2237,8 @@ impl VmCallerEnv for Host {
         match t {
             StorageType::Temporary | StorageType::Persistent => {
                 let key = self.storage_key_from_val(k, t.try_into()?)?;
-                let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
+                let lazy_entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
+                let entry = storage::from_lazy_entry(&lazy_entry)?;
                 match &entry.data {
                     LedgerEntryData::ContractData(e) => Ok(self.to_valid_host_val(&e.val)?),
                     _ => Err(self.err(
@@ -3762,8 +3763,9 @@ impl VmCallerEnv for Host {
                     self.try_borrow_storage_mut()?
                         .try_get_full(&storage_key, self, None)?;
                 if let Some((instance_entry, _ttl)) = maybe_instance_entry {
+                    let eager_entry = storage::from_lazy_entry(&instance_entry)?;
                     let instance =
-                        self.extract_contract_instance_from_ledger_entry(&instance_entry)?;
+                        self.extract_contract_instance_from_ledger_entry(&eager_entry)?;
                     Some(AddressExecutable::from_contract_executable_xdr(
                         &self,
                         &instance.executable,

@@ -14,17 +14,46 @@ use crate::host::metered_clone::{MeteredClone, MeteredIterator};
 use crate::{
     budget::Budget,
     host::metered_map::MeteredOrdMap,
-    ledger_info::get_key_durability,
     xdr::{
-        ContractDataDurability, LedgerEntry, LedgerKey, ScContractInstance, ScErrorCode,
-        ScErrorType, ScVal,
+        ContractDataDurability, LazyLedgerEntry, LazyLedgerKey, LedgerEntry, LedgerEntryType,
+        LedgerKey, ScContractInstance, ScErrorCode, ScErrorType, ScVal,
     },
     Env, Error, Host, HostError, Val,
 };
 
-pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
-pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
-pub type StorageMap = MeteredOrdMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>, Budget>;
+pub type FootprintMap = MeteredOrdMap<LazyLedgerKey, AccessType, Budget>;
+pub type EntryWithLiveUntil = (LazyLedgerEntry, Option<u32>);
+pub type StorageMap = MeteredOrdMap<LazyLedgerKey, Option<EntryWithLiveUntil>, Budget>;
+
+/// Convert an eager LedgerKey to a LazyLedgerKey.
+pub fn to_lazy_key(key: &LedgerKey) -> Result<LazyLedgerKey, HostError> {
+    LazyLedgerKey::try_from(key).map_err(|_| {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+        ))
+    })
+}
+
+/// Convert an eager LedgerEntry to a LazyLedgerEntry.
+pub fn to_lazy_entry(entry: &LedgerEntry) -> Result<LazyLedgerEntry, HostError> {
+    LazyLedgerEntry::try_from(entry).map_err(|_| {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+        ))
+    })
+}
+
+/// Convert a LazyLedgerEntry back to an eager LedgerEntry.
+pub fn from_lazy_entry(entry: &LazyLedgerEntry) -> Result<LedgerEntry, HostError> {
+    LedgerEntry::try_from(entry).map_err(|_| {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+        ))
+    })
+}
 
 /// The in-memory instance storage of the current running contract. Initially
 /// contains entries from the `ScMap` of the corresponding `ScContractInstance`
@@ -86,7 +115,7 @@ pub enum AccessType {
 pub trait SnapshotSource {
     /// Returns the ledger entry for the key and its live_until ledger if entry
     /// exists, or `None` otherwise.
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError>;
+    fn get(&self, key: &LazyLedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError>;
 }
 
 /// Describes the total set of [LedgerKey]s that a given transaction
@@ -105,31 +134,31 @@ impl Footprint {
     #[cfg(any(test, feature = "recording_mode"))]
     pub(crate) fn record_access(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         ty: AccessType,
         budget: &Budget,
     ) -> Result<(), HostError> {
-        if let Some(existing) = self.0.get::<Rc<LedgerKey>>(key, budget)? {
+        if let Some(existing) = self.0.get::<LazyLedgerKey>(key, budget)? {
             match (existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
                     // The only interesting case is an upgrade
                     // from previously-read-only to read-write.
-                    self.0 = self.0.insert(Rc::clone(key), ty, budget)?;
+                    self.0 = self.0.insert(key.clone(), ty, budget)?;
                     Ok(())
                 }
                 (AccessType::ReadWrite, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadWrite, AccessType::ReadWrite) => Ok(()),
             }
         } else {
-            self.0 = self.0.insert(Rc::clone(key), ty, budget)?;
+            self.0 = self.0.insert(key.clone(), ty, budget)?;
             Ok(())
         }
     }
 
     pub(crate) fn enforce_access(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         ty: AccessType,
         budget: &Budget,
     ) -> Result<(), HostError> {
@@ -139,7 +168,7 @@ impl Footprint {
         // entries to access), so it might be considered 'exceeded'.
         // This also helps distinguish access errors from the values simply
         // being  missing from storage (but with a valid footprint).
-        if let Some(existing) = self.0.get::<Rc<LedgerKey>>(key, budget)? {
+        if let Some(existing) = self.0.get::<LazyLedgerKey>(key, budget)? {
             match (existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
@@ -184,7 +213,7 @@ pub struct Storage {
 
 /// Helper struct holding common state for TTL extension operations.
 struct TtlExtensionInfo {
-    entry: Rc<LedgerEntry>,
+    entry: LazyLedgerEntry,
     old_live_until: u32,
     current_ttl: u32,
     max_live_until: u32,
@@ -213,6 +242,20 @@ impl Storage {
         }
     }
 
+    /// Lazy version of check_supported_ledger_entry_type using discriminant.
+    pub fn check_supported_lazy_ledger_entry_type(
+        le: &LazyLedgerEntry,
+    ) -> Result<(), HostError> {
+        use crate::xdr::LedgerEntryType;
+        match le.data().discriminant() {
+            LedgerEntryType::Account
+            | LedgerEntryType::Trustline
+            | LedgerEntryType::ContractData
+            | LedgerEntryType::ContractCode => Ok(()),
+            _ => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
+        }
+    }
+
     /// Only a subset of Stellar's XDR ledger key or entry types are supported
     /// by Soroban: accounts, trustlines, contract code and data. The rest are
     /// never used by stellar-core when interacting with the Soroban host, nor
@@ -224,6 +267,20 @@ impl Storage {
             Account(_) | Trustline(_) | ContractData(_) | ContractCode(_) => Ok(()),
             Offer(_) | Data(_) | ClaimableBalance(_) | LiquidityPool(_) | ConfigSetting(_)
             | Ttl(_) => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
+        }
+    }
+
+    /// Lazy version of check_supported_ledger_key_type using discriminant.
+    pub fn check_supported_lazy_ledger_key_type(
+        lk: &LazyLedgerKey,
+    ) -> Result<(), HostError> {
+        use crate::xdr::LedgerEntryType;
+        match lk.discriminant() {
+            LedgerEntryType::Account
+            | LedgerEntryType::Trustline
+            | LedgerEntryType::ContractData
+            | LedgerEntryType::ContractCode => Ok(()),
+            _ => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
         }
     }
 
@@ -252,13 +309,13 @@ impl Storage {
     // Helper function the next 3 `get`-variants funnel into.
     fn try_get_full_helper(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
         let _span = tracy_span!("storage get");
-        Self::check_supported_ledger_key_type(key)?;
+        Self::check_supported_lazy_ledger_key_type(key)?;
         self.prepare_read_only_access(key, host)?;
-        match self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())? {
+        match self.map.get::<LazyLedgerKey>(key, host.budget_ref())? {
             // Key has to be in the storage map at this point due to
             // `prepare_read_only_access`.
             None => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
@@ -268,36 +325,36 @@ impl Storage {
 
     pub(crate) fn try_get_full(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
         let res = self
             .try_get_full_helper(key, host)
-            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))?;
+            .map_err(|e| host.decorate_lazy_storage_error(e, key, key_val))?;
         Ok(res)
     }
 
     pub(crate) fn get(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
         key_val: Option<Val>,
-    ) -> Result<Rc<LedgerEntry>, HostError> {
+    ) -> Result<LazyLedgerEntry, HostError> {
         self.try_get_full(key, host, key_val)?
             .ok_or_else(|| (ScErrorType::Storage, ScErrorCode::MissingValue).into())
             .map(|e| e.0)
-            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
+            .map_err(|e| host.decorate_lazy_storage_error(e, key, key_val))
     }
 
     // Like `get`, but distinguishes between missing values (return `Ok(None)`)
     // and out-of-footprint values or errors (`Err(...)`).
     pub(crate) fn try_get(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
         key_val: Option<Val>,
-    ) -> Result<Option<Rc<LedgerEntry>>, HostError> {
+    ) -> Result<Option<LazyLedgerEntry>, HostError> {
         self.try_get_full(key, host, key_val)
             .map(|ok| ok.map(|pair| pair.0))
     }
@@ -318,7 +375,7 @@ impl Storage {
     /// [LedgerKey] has been declared in the [Footprint].
     pub(crate) fn get_with_live_until_ledger(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<EntryWithLiveUntil, HostError> {
@@ -326,19 +383,19 @@ impl Storage {
             .and_then(|maybe_entry| {
                 maybe_entry.ok_or_else(|| (ScErrorType::Storage, ScErrorCode::MissingValue).into())
             })
-            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
+            .map_err(|e| host.decorate_lazy_storage_error(e, key, key_val))
     }
 
     // Helper function `put` and `del` funnel into.
     fn put_opt_helper(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         val: Option<EntryWithLiveUntil>,
         host: &Host,
     ) -> Result<(), HostError> {
-        Self::check_supported_ledger_key_type(key)?;
+        Self::check_supported_lazy_ledger_key_type(key)?;
         if let Some(le) = &val {
-            Self::check_supported_ledger_entry_type(&le.0)?;
+            Self::check_supported_lazy_ledger_entry_type(&le.0)?;
         }
         #[cfg(any(test, feature = "recording_mode"))]
         self.handle_maybe_expired_entry(&key, host)?;
@@ -353,19 +410,19 @@ impl Storage {
                 self.footprint.enforce_access(key, ty, host.budget_ref())?;
             }
         };
-        self.map = self.map.insert(Rc::clone(key), val, host.budget_ref())?;
+        self.map = self.map.insert(key.clone(), val, host.budget_ref())?;
         Ok(())
     }
 
     fn put_opt(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         val: Option<EntryWithLiveUntil>,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
         self.put_opt_helper(key, val, host)
-            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
+            .map_err(|e| host.decorate_lazy_storage_error(e, key, key_val))
     }
 
     /// Attempts to write to the [LedgerEntry] associated with a given
@@ -379,8 +436,8 @@ impl Storage {
     /// [AccessType::ReadWrite].
     pub(crate) fn put(
         &mut self,
-        key: &Rc<LedgerKey>,
-        val: &Rc<LedgerEntry>,
+        key: &LazyLedgerKey,
+        val: &LazyLedgerEntry,
         live_until_ledger: Option<u32>,
         host: &Host,
         key_val: Option<Val>,
@@ -400,13 +457,13 @@ impl Storage {
     /// [AccessType::ReadWrite].
     pub(crate) fn del(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
         let _span = tracy_span!("storage del");
         self.put_opt(key, None, host, key_val)
-            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
+            .map_err(|e| host.decorate_lazy_storage_error(e, key, key_val))
     }
 
     /// Attempts to determine the presence of a [LedgerEntry] associated with a
@@ -420,7 +477,7 @@ impl Storage {
     /// declared in the [Footprint].
     pub(crate) fn has(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<bool, HostError> {
@@ -433,11 +490,11 @@ impl Storage {
     fn prepare_extend_ttl(
         &mut self,
         host: &Host,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         extend_to: u32,
         key_val: Option<Val>,
     ) -> Result<TtlExtensionInfo, HostError> {
-        Self::check_supported_ledger_key_type(key)?;
+        Self::check_supported_lazy_ledger_key_type(key)?;
 
         #[cfg(any(test, feature = "recording_mode"))]
         self.handle_maybe_expired_entry(key, host)?;
@@ -466,7 +523,7 @@ impl Storage {
 
         let max_live_until = host.max_live_until_ledger()?;
 
-        let durability = get_key_durability(key).ok_or_else(|| {
+        let durability = crate::ledger_info::get_lazy_key_durability(key).ok_or_else(|| {
             host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -501,7 +558,7 @@ impl Storage {
     fn apply_ttl_extension(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: LazyLedgerKey,
         ttl_ext_info: TtlExtensionInfo,
         new_live_until: u32,
     ) -> Result<(), HostError> {
@@ -532,7 +589,7 @@ impl Storage {
     pub(crate) fn extend_ttl(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: LazyLedgerKey,
         threshold: u32,
         extend_to: u32,
         key_val: Option<Val>,
@@ -594,7 +651,7 @@ impl Storage {
     pub(crate) fn extend_ttl_v2(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: LazyLedgerKey,
         extend_to: u32,
         min_extension: u32,
         max_extension: u32,
@@ -648,7 +705,7 @@ impl Storage {
     pub(crate) fn is_key_live_in_snapshot(
         &self,
         host: &Host,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
     ) -> Result<bool, HostError> {
         match &self.mode {
             FootprintMode::Recording(snapshot) => {
@@ -681,10 +738,10 @@ impl Storage {
     #[cfg(any(test, feature = "testutils"))]
     pub(crate) fn get_from_map(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        match self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())? {
+        match self.map.get::<LazyLedgerKey>(key, host.budget_ref())? {
             Some(pair_option) => Ok(pair_option.clone()),
             None => Ok(None),
         }
@@ -692,7 +749,7 @@ impl Storage {
 
     fn prepare_read_only_access(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
     ) -> Result<(), HostError> {
         let ty = AccessType::ReadOnly;
@@ -704,7 +761,7 @@ impl Storage {
                 // that misses read-through to the underlying src.
                 if !self
                     .map
-                    .contains_key::<Rc<LedgerKey>>(key, host.budget_ref())?
+                    .contains_key::<LazyLedgerKey>(key, host.budget_ref())?
                 {
                     let value = src.get(&key)?;
                     self.map = self.map.insert(key.clone(), value, host.budget_ref())?;
@@ -722,15 +779,15 @@ impl Storage {
     #[cfg(any(test, feature = "recording_mode"))]
     fn handle_maybe_expired_entry(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LazyLedgerKey,
         host: &Host,
     ) -> Result<(), HostError> {
         host.with_ledger_info(|li| {
             let budget = host.budget_ref();
             if let Some(Some((entry, live_until))) =
-                self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())?
+                self.map.get::<LazyLedgerKey>(key, host.budget_ref())?
             {
-                if let Some(durability) = get_key_durability(key.as_ref()) {
+                if let Some(durability) = crate::ledger_info::get_lazy_key_durability(key) {
                     let live_until = live_until.ok_or_else(|| {
                         host.err(
                             ScErrorType::Storage,
@@ -897,6 +954,60 @@ impl Host {
         };
         Ok(res)
     }
+
+    /// Simplified error decoration for lazy ledger keys.
+    /// Since lazy keys don't have eagerly-accessible fields, we provide
+    /// less-detailed error messages but still categorize by key type.
+    fn decorate_lazy_storage_error(
+        &self,
+        err: HostError,
+        lk: &LazyLedgerKey,
+        _key_val: Option<Val>,
+    ) -> HostError {
+        let mut err = err;
+        self.with_debug_mode_allowing_new_objects(
+            || {
+                if !err.error.is_type(ScErrorType::Storage) {
+                    return Ok(());
+                }
+                if !err.error.is_code(ScErrorCode::ExceededLimit)
+                    && !err.error.is_code(ScErrorCode::MissingValue)
+                {
+                    return Ok(());
+                }
+
+                use crate::xdr::LedgerEntryType;
+                let key_type_str = match lk.discriminant() {
+                    LedgerEntryType::ContractData => "contract data key",
+                    LedgerEntryType::ContractCode => "contract code",
+                    LedgerEntryType::Account => "account",
+                    LedgerEntryType::Trustline => "account trustline",
+                    _ => "ledger key",
+                };
+
+                if err.error.is_code(ScErrorCode::ExceededLimit) {
+                    err = self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::ExceededLimit,
+                        format!("trying to access {} outside of the footprint", key_type_str)
+                            .as_str(),
+                        &[],
+                    );
+                } else if err.error.is_code(ScErrorCode::MissingValue) {
+                    err = self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::MissingValue,
+                        format!("trying to get non-existing value for {}", key_type_str).as_str(),
+                        &[],
+                    );
+                }
+
+                Ok(())
+            },
+            true,
+        );
+        err
+    }
 }
 
 #[cfg(any(test, feature = "recording_mode"))]
@@ -907,5 +1018,14 @@ pub(crate) fn is_persistent_key(key: &LedgerKey) -> bool {
         }
         LedgerKey::ContractCode(_) => true,
         _ => false,
+    }
+}
+
+#[cfg(any(test, feature = "recording_mode"))]
+pub(crate) fn is_persistent_lazy_key(key: &LazyLedgerKey) -> bool {
+    if let Some(cd) = key.as_contract_data() {
+        matches!(cd.durability(), ContractDataDurability::Persistent)
+    } else {
+        key.as_contract_code().is_some()
     }
 }

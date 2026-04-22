@@ -607,6 +607,13 @@ impl MeteredClone for LedgerEntry {
     }
 }
 
+// Lazy XDR types: cloning is just an Arc refcount bump (shallow copy).
+// No substructure to charge for — the backing buffer is shared.
+impl MeteredClone for crate::xdr::LazyLedgerKey {}
+impl MeteredClone for crate::xdr::LazyLedgerEntry {}
+impl MeteredClone for crate::xdr::LazyTtlEntry {}
+impl MeteredClone for crate::xdr::LazyHandle {}
+
 impl MeteredClone for Signer {
     const IS_SHALLOW: bool = false;
 

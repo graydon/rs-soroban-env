@@ -294,11 +294,11 @@ impl Host {
             budget.with_shadow_mode(|| {
                 store.map.len().metered_hash(&mut state, budget)?;
                 for (k, v) in store.map.iter(budget)? {
-                    k.metered_hash_xdr(&mut state, budget)?;
+                    k.as_ref().as_slice().metered_hash(&mut state, budget)?;
                     match v {
                         Some((entry, ttl)) => {
                             0.metered_hash(&mut state, budget)?;
-                            entry.metered_hash_xdr(&mut state, budget)?;
+                            entry.as_ref().as_slice().metered_hash(&mut state, budget)?;
                             ttl.metered_hash(&mut state, budget)?;
                         }
                         None => {
@@ -366,7 +366,7 @@ impl Host {
             budget.with_shadow_mode(|| {
                 storage.footprint.0.len().metered_hash(&mut state, budget)?;
                 for (k, v) in storage.footprint.0.iter(budget)? {
-                    k.metered_hash_xdr(&mut state, budget)?;
+                    k.as_ref().as_slice().metered_hash(&mut state, budget)?;
                     v.metered_hash(&mut state, budget)?;
                 }
                 Ok(())

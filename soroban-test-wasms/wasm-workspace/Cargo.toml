@@ -89,4 +89,4 @@ soroban-env-host = { path = "../../soroban-env-host" }
 soroban-sdk = { path = "../../../rs-soroban-sdk/soroban-sdk" }
 
 # [patch."https://github.com/stellar/rs-stellar-xdr"]
-stellar-xdr = { path = "../../../rs-stellar-xdr/" }
+stellar-xdr = { path = "../../../../rs-stellar-xdr/" }

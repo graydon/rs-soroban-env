@@ -24,19 +24,21 @@ use crate::{
     storage::{AccessType, Footprint, FootprintMap, SnapshotSource, Storage, StorageMap},
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
-        LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
-        LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine,
-        ScErrorCode, ScErrorType, SorobanAuthorizationEntry, SorobanResources, TtlEntry,
+        LazyLedgerEntry, LazyLedgerKey, LedgerEntry, LedgerEntryData, LedgerEntryType,
+        LedgerFootprint, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
+        LedgerKeyContractData, LedgerKeyTrustLine, ScErrorCode, ScErrorType,
+        SorobanAuthorizationEntry, SorobanResources, TtlEntry,
     },
     DiagnosticLevel, Error, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
-use crate::{ledger_info::get_key_durability, ModuleCache};
+use crate::ModuleCache;
 use crate::{storage::EntryWithLiveUntil, vm::wasm_module_memory_cost};
 #[cfg(any(test, feature = "recording_mode"))]
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
-type TtlEntryMap = MeteredOrdMap<Rc<LedgerKey>, Rc<TtlEntry>, Budget>;
-type RestoredKeySet = MeteredOrdMap<Rc<LedgerKey>, (), Budget>;
+type TtlEntryMap = MeteredOrdMap<LazyLedgerKey, Rc<TtlEntry>, Budget>;
+type RestoredKeySet = MeteredOrdMap<LazyLedgerKey, (), Budget>;
 
 /// Result of invoking a single host function prepared for embedder consumption.
 pub struct InvokeHostFunctionResult {
@@ -150,21 +152,21 @@ fn build_restored_key_set(
     let rw_footprint = &resources.footprint.read_write;
     let mut key_set = RestoredKeySet::default();
     for e in restored_rw_entry_indices {
-        key_set = key_set.insert(
-            Rc::new(
-                rw_footprint
-                    .get(*e as usize)
-                    .ok_or_else(|| {
-                        HostError::from(Error::from_type_and_code(
-                            ScErrorType::Storage,
-                            ScErrorCode::InternalError,
-                        ))
-                    })?
-                    .metered_clone(budget)?,
-            ),
-            (),
-            budget,
-        )?;
+        let eager_key = rw_footprint
+            .get(*e as usize)
+            .ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+        let lazy_key = LazyLedgerKey::try_from(eager_key).map_err(|_| {
+            HostError::from(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            ))
+        })?;
+        key_set = key_set.insert(lazy_key, (), budget)?;
     }
     Ok(Some(key_set))
 }
@@ -205,11 +207,12 @@ fn get_ledger_changes(
     };
     for (key, entry_with_live_until_ledger) in storage.map.iter(budget)? {
         let mut entry_change = LedgerEntryChange::default();
-        metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
-        let durability = get_key_durability(key);
+        // For lazy keys, copy XDR bytes directly instead of serializing
+        entry_change.encoded_key = key.as_ref().as_slice().to_vec();
+        let durability = crate::ledger_info::get_lazy_key_durability(key);
 
         if let Some(durability) = durability {
-            let key_hash = match init_ttl_entries.get::<Rc<LedgerKey>>(key, budget)? {
+            let key_hash = match init_ttl_entries.get::<LazyLedgerKey>(key, budget)? {
                 Some(ttl_entry) => ttl_entry.key_hash.0.to_vec(),
                 None => sha256_hash_from_bytes(entry_change.encoded_key.as_slice(), budget)?,
             };
@@ -224,20 +227,15 @@ fn get_ledger_changes(
         }
         let entry_with_live_until = init_storage_snapshot.get(key)?;
         if let Some((old_entry, old_live_until_ledger)) = entry_with_live_until {
-            let mut buf = vec![];
-            metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
+            // For lazy entries, copy XDR bytes directly
+            let buf = old_entry.as_ref().as_slice().to_vec();
 
             entry_change.old_entry_size_bytes_for_rent =
-                entry_size_for_rent(budget, &old_entry, saturating_usize_to_u32(buf.len()))?;
+                lazy_entry_size_for_rent(budget, &old_entry, saturating_usize_to_u32(buf.len()))?;
 
             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                 ttl_change.old_live_until_ledger =
                     old_live_until_ledger.ok_or_else(internal_error)?;
-                // In recording mode we might encounter ledger changes that have an expired 'old'
-                // entry. In that case we should treat it as non-existent instead.
-                // Note, that this should only be necessary for the temporary
-                // entries, the auto-restored persistent entries are handled below
-                // via `restored_keys` check.
                 #[cfg(any(test, feature = "recording_mode"))]
                 if ttl_change.old_live_until_ledger < current_ledger_seq {
                     ttl_change.old_live_until_ledger = 0;
@@ -247,7 +245,6 @@ fn get_ledger_changes(
         }
         if let Some((_, new_live_until_ledger)) = entry_with_live_until_ledger {
             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
-                // Never reduce the final live until ledger.
                 ttl_change.new_live_until_ledger = max(
                     new_live_until_ledger.ok_or_else(internal_error)?,
                     ttl_change.old_live_until_ledger,
@@ -255,16 +252,16 @@ fn get_ledger_changes(
             }
         }
         let maybe_access_type: Option<AccessType> =
-            footprint_map.get::<Rc<LedgerKey>>(key, budget)?.copied();
+            footprint_map.get::<LazyLedgerKey>(key, budget)?.copied();
         match maybe_access_type {
             Some(AccessType::ReadOnly) => {
                 entry_change.read_only = true;
             }
             Some(AccessType::ReadWrite) => {
                 if let Some((entry, _)) = entry_with_live_until_ledger {
-                    let mut entry_buf = vec![];
-                    metered_write_xdr(budget, entry.as_ref(), &mut entry_buf)?;
-                    entry_change.new_entry_size_bytes_for_rent = entry_size_for_rent(
+                    // For lazy entries, copy XDR bytes directly
+                    let entry_buf = entry.as_ref().as_slice().to_vec();
+                    entry_change.new_entry_size_bytes_for_rent = lazy_entry_size_for_rent(
                         budget,
                         &entry,
                         saturating_usize_to_u32(entry_buf.len()),
@@ -272,7 +269,7 @@ fn get_ledger_changes(
                     entry_change.encoded_new_value = Some(entry_buf);
 
                     if let Some(restored_keys) = &restored_keys {
-                        if restored_keys.contains_key::<LedgerKey>(key, budget)? {
+                        if restored_keys.contains_key::<LazyLedgerKey>(key, budget)? {
                             entry_change.old_entry_size_bytes_for_rent = 0;
                             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                                 ttl_change.old_live_until_ledger = 0;
@@ -310,11 +307,12 @@ fn add_footprint_only_ledger_changes(
     for (key, access_type) in storage.footprint.0.iter(budget)? {
         // We have to check if the entry exists in the internal storage map
         // because `has` check on storage affects the footprint.
-        if storage.map.contains_key::<Rc<LedgerKey>>(key, budget)? {
+        if storage.map.contains_key::<LazyLedgerKey>(key, budget)? {
             continue;
         }
         let mut entry_change = LedgerEntryChange::default();
-        metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
+        // For lazy keys, copy XDR bytes directly
+        entry_change.encoded_key = key.as_ref().as_slice().to_vec();
         entry_change.read_only = matches!(*access_type, AccessType::ReadOnly);
         changes.push(entry_change);
     }
@@ -384,6 +382,28 @@ pub fn entry_size_for_rent(
         ),
         _ => entry_xdr_size,
     })
+}
+
+/// Lazy version of entry_size_for_rent that works with LazyLedgerEntry.
+/// For contract code entries, we still need to decode to get the memory cost.
+fn lazy_entry_size_for_rent(
+    budget: &Budget,
+    entry: &LazyLedgerEntry,
+    entry_xdr_size: u32,
+) -> Result<u32, HostError> {
+    use crate::xdr::LedgerEntryType;
+    if entry.data().discriminant() == LedgerEntryType::ContractCode {
+        // Need to decode to access contract code for memory cost calculation
+        let eager_entry = LedgerEntry::try_from(entry).map_err(|_| {
+            HostError::from(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            ))
+        })?;
+        entry_size_for_rent(budget, &eager_entry, entry_xdr_size)
+    } else {
+        Ok(entry_xdr_size)
+    }
 }
 
 /// Invokes a host function within a fresh host instance.
@@ -548,9 +568,13 @@ fn storage_footprint_to_ledger_footprint(
     let mut read_only: Vec<LedgerKey> = Vec::with_capacity(footprint.0.len());
     let mut read_write: Vec<LedgerKey> = Vec::with_capacity(footprint.0.len());
     for (key, access_type) in &footprint.0 {
+        // Convert lazy key back to eager for the LedgerFootprint output
+        let eager_key = LedgerKey::try_from(key).map_err(|_| {
+            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
+        })?;
         match access_type {
-            AccessType::ReadOnly => read_only.push((**key).clone()),
-            AccessType::ReadWrite => read_write.push((**key).clone()),
+            AccessType::ReadOnly => read_only.push(eager_key),
+            AccessType::ReadWrite => read_write.push(eager_key),
         }
     }
     Ok(LedgerFootprint {
@@ -733,21 +757,20 @@ pub fn invoke_host_function_in_recording_mode(
             for (lk, access_type) in &storage.footprint.0 {
                 let entry_with_live_until = ledger_snapshot.get(lk)?;
                 if let Some((le, live_until)) = entry_with_live_until {
-                    let encoded_le = host.to_xdr_non_metered(&*le)?;
-                    match &le.data {
-                        LedgerEntryData::ContractData(_) | LedgerEntryData::ContractCode(_) => {
+                    // For lazy entries, get the XDR bytes directly
+                    let encoded_le = le.as_ref().as_slice().to_vec();
+                    use crate::xdr::LedgerEntryType;
+                    let disc = le.data().discriminant();
+                    match disc {
+                        LedgerEntryType::ContractData | LedgerEntryType::ContractCode => {
                             if let Some(live_until) = live_until {
-                                // Check if entry has been auto-restored (only persistent entries
-                                // can be auto-restored)
-                                if live_until < ledger_seq && is_persistent_key(lk.as_ref()) {
-                                    // Auto-restored entries are expected to be in RW footprint.
+                                if live_until < ledger_seq && crate::storage::is_persistent_lazy_key(lk) {
                                     if !matches!(*access_type, AccessType::ReadWrite) {
                                         return Err(HostError::from(Error::from_type_and_code(
                                             ScErrorType::Storage,
                                             ScErrorCode::InternalError,
                                         )));
                                     }
-                                    // Auto-restored entries are counted towards disk read bytes.
                                     disk_read_bytes = disk_read_bytes
                                         .saturating_add(saturating_usize_to_u32(encoded_le.len()));
                                     restored_rw_entry_ids.push(current_rw_id);
@@ -757,7 +780,6 @@ pub fn invoke_host_function_in_recording_mode(
                             }
                         }
                         _ => {
-                            // Non-Soroban entries are counted towards disk read bytes.
                             disk_read_bytes = disk_read_bytes
                                 .saturating_add(saturating_usize_to_u32(encoded_le.len()));
                         }
@@ -765,7 +787,8 @@ pub fn invoke_host_function_in_recording_mode(
 
                     encoded_ledger_entries.push(encoded_le);
                     if let Some(live_until_ledger) = live_until {
-                        let key_xdr = host.to_xdr_non_metered(lk.as_ref())?;
+                        // For lazy keys, get XDR bytes directly
+                        let key_xdr = lk.as_ref().as_slice();
                         let key_hash: [u8; 32] = Sha256::digest(&key_xdr).into();
                         let ttl_entry = TtlEntry {
                             key_hash: key_hash.try_into().map_err(|_| {
@@ -930,6 +953,128 @@ pub(crate) fn ledger_entry_to_ledger_key(
     }
 }
 
+/// Extract a LazyLedgerKey from a LazyLedgerEntry without eagerly decoding
+/// the entire entry. Navigates the lazy XDR byte offsets to extract only the
+/// key-relevant fields, then assembles a new small key buffer.
+pub(crate) fn lazy_ledger_entry_to_lazy_ledger_key(
+    entry: &LazyLedgerEntry,
+) -> Result<LazyLedgerKey, HostError> {
+    use crate::xdr::{LazyHandle, LedgerEntryType};
+
+    let data = entry.data();
+    let disc = data.discriminant();
+    let disc_i32 = disc as i32;
+    let mut buf = Vec::with_capacity(80);
+    buf.extend_from_slice(&disc_i32.to_be_bytes());
+
+    match disc {
+        LedgerEntryType::Account => {
+            let e = data.as_account().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.account_id().as_ref().as_slice());
+        }
+        LedgerEntryType::Trustline => {
+            let e = data.as_trustline().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.account_id().as_ref().as_slice());
+            buf.extend_from_slice(e.asset().as_ref().as_slice());
+        }
+        LedgerEntryType::Offer => {
+            let e = data.as_offer().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.seller_id().as_ref().as_slice());
+            buf.extend_from_slice(&e.offer_id().to_be_bytes());
+        }
+        LedgerEntryType::Data => {
+            let e = data.as_data().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.account_id().as_ref().as_slice());
+            buf.extend_from_slice(e.data_name().as_ref().as_slice());
+        }
+        LedgerEntryType::ClaimableBalance => {
+            let e = data.as_claimable_balance().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.balance_id().as_ref().as_slice());
+        }
+        LedgerEntryType::LiquidityPool => {
+            let e = data.as_liquidity_pool().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.liquidity_pool_id().as_ref().as_slice());
+        }
+        LedgerEntryType::ContractData => {
+            let e = data.as_contract_data().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.contract().as_ref().as_slice());
+            buf.extend_from_slice(e.key().as_ref().as_slice());
+            buf.extend_from_slice(&(e.durability() as i32).to_be_bytes());
+        }
+        LedgerEntryType::ContractCode => {
+            let e = data.as_contract_code().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.hash().as_ref().as_slice());
+        }
+        LedgerEntryType::ConfigSetting => {
+            let e = data.as_config_setting().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(&e.discriminant_i32().to_be_bytes());
+        }
+        LedgerEntryType::Ttl => {
+            let e = data.as_ttl().ok_or_else(|| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ))
+            })?;
+            buf.extend_from_slice(e.key_hash().as_ref().as_slice());
+        }
+    }
+
+    let arc: Arc<[u8]> = buf.into();
+    // Bytes are assembled from validated sub-handles, use try_from to validate
+    LazyLedgerKey::try_from(arc).map_err(|_| {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+        ))
+    })
+}
+
 fn build_storage_footprint_from_xdr(
     budget: &Budget,
     footprint: LedgerFootprint,
@@ -938,20 +1083,24 @@ fn build_storage_footprint_from_xdr(
 
     for key in footprint.read_write.as_vec() {
         Storage::check_supported_ledger_key_type(&key)?;
-        footprint_map = footprint_map.insert(
-            Rc::metered_new(key.metered_clone(budget)?, budget)?,
-            AccessType::ReadWrite,
-            budget,
-        )?;
+        let lazy_key = LazyLedgerKey::try_from(key).map_err(|_| {
+            HostError::from(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            ))
+        })?;
+        footprint_map = footprint_map.insert(lazy_key, AccessType::ReadWrite, budget)?;
     }
 
     for key in footprint.read_only.as_vec() {
         Storage::check_supported_ledger_key_type(&key)?;
-        footprint_map = footprint_map.insert(
-            Rc::metered_new(key.metered_clone(budget)?, budget)?,
-            AccessType::ReadOnly,
-            budget,
-        )?;
+        let lazy_key = LazyLedgerKey::try_from(key).map_err(|_| {
+            HostError::from(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            ))
+        })?;
+        footprint_map = footprint_map.insert(lazy_key, AccessType::ReadOnly, budget)?;
     }
     Ok(Footprint(footprint_map))
 }
@@ -973,22 +1122,32 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
         );
     }
 
+    let xdr_err = || {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+        ))
+    };
+
     for (entry_buf, ttl_buf) in encoded_ledger_entries.zip(encoded_ttl_entries) {
         let mut live_until_ledger: Option<u32> = None;
 
-        let le = Rc::metered_new(
-            metered_from_xdr_with_budget::<LedgerEntry>(entry_buf.as_ref(), budget)?,
-            budget,
-        )?;
-        let key = Rc::metered_new(ledger_entry_to_ledger_key(&le, budget)?, budget)?;
+        // Create lazy entry directly from raw XDR bytes — no eager decode
+        let entry_bytes = entry_buf.as_ref();
+        let arc_entry: Arc<[u8]> = entry_bytes.into();
+        let lazy_entry =
+            LazyLedgerEntry::try_from(arc_entry).map_err(|_| xdr_err())?;
+
+        // Extract key from the lazy entry using lazy accessors only —
+        // navigates byte offsets, copies only key-relevant sub-slices,
+        // never materializes a full eager LedgerEntry.
+        let lazy_key = lazy_ledger_entry_to_lazy_ledger_key(&lazy_entry)?;
+
         if !ttl_buf.as_ref().is_empty() {
             let ttl_entry = Rc::metered_new(
                 metered_from_xdr_with_budget::<TtlEntry>(ttl_buf.as_ref(), budget)?,
                 budget,
             )?;
-            // In the default host flow (i.e. enforcing storage only) we don't
-            // expect expired entries to ever appear in the storage map, so
-            // that's always an internal error.
             #[cfg(not(any(test, feature = "recording_mode")))]
             if ttl_entry.live_until_ledger_seq < ledger_num {
                 #[cfg(any(test, feature = "recording_mode"))]
@@ -1000,9 +1159,6 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
                     .into());
                 }
             }
-            // In the recording mode we still compile both recording and
-            // enforcing functions, and we do allow expired entries in the
-            // recording mode when allow_expired_entries is true.
             #[cfg(any(test, feature = "recording_mode"))]
             if ttl_entry.live_until_ledger_seq < ledger_num {
                 #[cfg(any(test, feature = "recording_mode"))]
@@ -1013,40 +1169,33 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
                     )
                     .into());
                 }
-                // Skip expired temp entries, as these can't actually appear in
-                // storage.
-                if !crate::storage::is_persistent_key(key.as_ref()) {
+                if !crate::storage::is_persistent_lazy_key(&lazy_key) {
                     continue;
                 }
             }
 
             live_until_ledger = Some(ttl_entry.live_until_ledger_seq);
 
-            ttl_map = ttl_map.insert(key.clone(), ttl_entry, budget)?;
-        } else if matches!(le.as_ref().data, LedgerEntryData::ContractData(_))
-            || matches!(le.as_ref().data, LedgerEntryData::ContractCode(_))
-        {
-            return Err(Error::from_type_and_code(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-            )
-            .into());
+            ttl_map = ttl_map.insert(lazy_key.clone(), ttl_entry, budget)?;
+        } else {
+            use crate::xdr::LedgerEntryType;
+            let disc = lazy_entry.data().discriminant();
+            if disc == LedgerEntryType::ContractData || disc == LedgerEntryType::ContractCode {
+                return Err(xdr_err());
+            }
         }
 
-        if !footprint.0.contains_key::<LedgerKey>(&key, budget)? {
-            return Err(Error::from_type_and_code(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-            )
-            .into());
+        if !footprint.0.contains_key::<LazyLedgerKey>(&lazy_key, budget)? {
+            return Err(xdr_err());
         }
-        storage_map = storage_map.insert(key, Some((le, live_until_ledger)), budget)?;
+        storage_map =
+            storage_map.insert(lazy_key, Some((lazy_entry, live_until_ledger)), budget)?;
     }
 
     // Add non-existing entries from the footprint to the storage.
     for k in footprint.0.keys(budget)? {
-        if !storage_map.contains_key::<LedgerKey>(k, budget)? {
-            storage_map = storage_map.insert(Rc::clone(k), None, budget)?;
+        if !storage_map.contains_key::<LazyLedgerKey>(k, budget)? {
+            storage_map = storage_map.insert(k.clone(), None, budget)?;
         }
     }
     Ok((storage_map, ttl_map))
@@ -1071,11 +1220,11 @@ struct StorageMapSnapshotSource<'a> {
 }
 
 impl SnapshotSource for StorageMapSnapshotSource<'_> {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LazyLedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError> {
         if let Some(Some((entry, live_until_ledger))) =
-            self.map.get::<Rc<LedgerKey>>(key, self.budget)?
+            self.map.get::<LazyLedgerKey>(key, self.budget)?
         {
-            Ok(Some((Rc::clone(entry), *live_until_ledger)))
+            Ok(Some((entry.clone(), *live_until_ledger)))
         } else {
             Ok(None)
         }

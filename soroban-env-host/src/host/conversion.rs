@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::host_object::{MemHostObjectType, MuxedScAddress};
 use crate::{
     budget::{AsBudget, DepthLimiter},
@@ -10,11 +8,12 @@ use crate::{
     },
     host_object::{HostMap, HostObject, HostVec},
     num::{i256_from_pieces, i256_into_pieces, u256_from_pieces, u256_into_pieces},
+    storage,
     xdr::{
         self, int128_helpers, AccountId, ContractCostType, ContractDataDurability, ContractId,
-        Hash, Int128Parts, Int256Parts, LedgerKey, LedgerKeyContractData, MuxedEd25519Account,
-        PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType, ScMap, ScMapEntry, ScSymbol,
-        ScVal, ScVec, UInt128Parts, UInt256Parts, Uint256, VecM,
+        Hash, Int128Parts, Int256Parts, LazyLedgerKey, LedgerKey, LedgerKeyContractData,
+        MuxedEd25519Account, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType, ScMap,
+        ScMapEntry, ScSymbol, ScVal, ScVec, UInt128Parts, UInt256Parts, Uint256, VecM,
     },
     AddressObject, BytesObject, Convert, Host, HostError, Object, ScValObjRef, ScValObject, Symbol,
     SymbolObject, TryFromVal, TryIntoVal, U256Val, U32Val, Val, VecObject,
@@ -133,22 +132,20 @@ impl Host {
         contract: ScAddress,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
-        Rc::metered_new(
-            LedgerKey::ContractData(LedgerKeyContractData {
-                contract,
-                key,
-                durability,
-            }),
-            self,
-        )
+    ) -> Result<LazyLedgerKey, HostError> {
+        let eager = LedgerKey::ContractData(LedgerKeyContractData {
+            contract,
+            key,
+            durability,
+        });
+        storage::to_lazy_key(&eager)
     }
 
     pub(crate) fn storage_key_from_scval(
         &self,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LazyLedgerKey, HostError> {
         let contract_id = self.get_current_contract_id_internal()?;
         self.storage_key_for_address(ScAddress::Contract(contract_id), key, durability)
     }
@@ -160,7 +157,7 @@ impl Host {
         &self,
         k: Val,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LazyLedgerKey, HostError> {
         let key_scval = self.from_host_val_for_storage(k)?;
         self.storage_key_from_scval(key_scval, durability)
     }

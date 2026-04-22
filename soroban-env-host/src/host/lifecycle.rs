@@ -1,14 +1,15 @@
 use crate::{
     crypto, err,
     host::{
-        metered_clone::{MeteredAlloc, MeteredClone},
+        metered_clone::MeteredClone,
         metered_write_xdr, ContractReentryMode,
     },
+    storage,
     vm::Vm,
     xdr::{
         Asset, ContractCodeEntry, ContractDataDurability, ContractExecutable, ContractId,
         ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2, ExtensionPoint,
-        Hash, LedgerKey, LedgerKeyContractCode, ScAddress, ScErrorCode, ScErrorType,
+        Hash, ScAddress, ScErrorCode, ScErrorType,
     },
     AddressObject, BytesObject, Host, HostError, Symbol, TryFromVal, TryIntoVal, Val,
 };
@@ -287,12 +288,7 @@ impl Host {
         }
 
         let hash_obj = self.add_host_object(self.scbytes_from_slice(hash_bytes.as_slice())?)?;
-        let code_key = Rc::metered_new(
-            LedgerKey::ContractCode(LedgerKeyContractCode {
-                hash: Hash(hash_bytes.metered_clone(self)?),
-            }),
-            self,
-        )?;
+        let code_key = self.contract_code_ledger_key(&Hash(hash_bytes.metered_clone(self)?))?;
 
         let mut storage = self.try_borrow_storage_mut()?;
 
@@ -302,7 +298,8 @@ impl Host {
 
         // We may also, in the cache-supporting protocol, overwrite the contract if its ext field changed.
         if !should_put_contract {
-            let entry = storage.get(&code_key, self, None)?;
+            let lazy_entry = storage.get(&code_key, self, None)?;
+            let entry = crate::storage::from_lazy_entry(&lazy_entry)?;
             if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
                 ext: old_ext,
                 ..

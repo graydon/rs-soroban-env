@@ -6,8 +6,8 @@ use crate::{
     builtin_contracts::testutils::create_account,
     storage::{SnapshotSource, Storage},
     xdr::{
-        AccountId, ContractCostType, LedgerEntry, LedgerKey, PublicKey, ScAddress, ScVal, ScVec,
-        Uint256,
+        AccountId, ContractCostType, LazyLedgerEntry, LazyLedgerKey, LedgerEntry, LedgerKey,
+        PublicKey, ScAddress, ScVal, ScVec, Uint256,
     },
     AddressObject, BytesObject, Env, EnvBase, Host, HostError, LedgerInfo, MeteredOrdMap,
     StorageType, SymbolSmall, Val, VecObject,
@@ -117,28 +117,30 @@ pub fn generate_bytes_array(host: &Host) -> [u8; 32] {
     bytes
 }
 
-pub struct MockSnapshotSource(BTreeMap<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>);
+pub struct MockSnapshotSource(BTreeMap<LazyLedgerKey, (LazyLedgerEntry, Option<u32>)>);
 
 impl MockSnapshotSource {
     pub fn new() -> Self {
-        Self(BTreeMap::<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>::new())
+        Self(BTreeMap::<LazyLedgerKey, (LazyLedgerEntry, Option<u32>)>::new())
     }
 
     pub fn from_entries(entries: Vec<(LedgerEntry, Option<u32>)>) -> Self {
-        let mut map = BTreeMap::<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>::new();
+        let mut map = BTreeMap::<LazyLedgerKey, (LazyLedgerEntry, Option<u32>)>::new();
         let dummy_budget = Budget::default();
         for (e, maybe_ttl) in entries {
-            let key = Rc::new(ledger_entry_to_ledger_key(&e, &dummy_budget).unwrap());
-            map.insert(key, (Rc::new(e), maybe_ttl));
+            let key = ledger_entry_to_ledger_key(&e, &dummy_budget).unwrap();
+            let lazy_key = LazyLedgerKey::try_from(&key).unwrap();
+            let lazy_entry = LazyLedgerEntry::try_from(&e).unwrap();
+            map.insert(lazy_key, (lazy_entry, maybe_ttl));
         }
         Self(map)
     }
 }
 
 impl SnapshotSource for MockSnapshotSource {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LazyLedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError> {
         if let Some((entry, live_until)) = self.0.get(key) {
-            Ok(Some((Rc::clone(entry), *live_until)))
+            Ok(Some((entry.clone(), *live_until)))
         } else {
             Ok(None)
         }
