@@ -24,10 +24,11 @@ use crate::{
     storage::{AccessType, Footprint, FootprintMap, SnapshotSource, Storage, StorageMap},
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
-        LazyLedgerEntry, LazyLedgerKey, LedgerEntry, LedgerEntryData, LedgerEntryType,
-        LedgerFootprint, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
-        LedgerKeyContractData, LedgerKeyTrustLine, ScErrorCode, ScErrorType,
-        SorobanAuthorizationEntry, SorobanResources, TtlEntry,
+        LazyHostFunction, LazyLedgerEntry, LazyLedgerFootprint, LazyLedgerKey,
+        LazySorobanAuthorizationEntry, LazySorobanResources, LazyTtlEntry, LazyVecM,
+        LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
+        LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine,
+        ScErrorCode, ScErrorType, SorobanAuthorizationEntry, SorobanResources, TtlEntry,
     },
     DiagnosticLevel, Error, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
@@ -38,6 +39,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 type TtlEntryMap = MeteredOrdMap<LazyLedgerKey, Rc<TtlEntry>, Budget>;
+type LazyTtlEntryMap = MeteredOrdMap<LazyLedgerKey, LazyTtlEntry, Budget>;
 type RestoredKeySet = MeteredOrdMap<LazyLedgerKey, (), Budget>;
 
 /// Result of invoking a single host function prepared for embedder consumption.
@@ -524,6 +526,136 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
             &restored_keys,
             #[cfg(any(test, feature = "recording_mode"))]
             current_ledger_seq,
+        )?;
+        let encoded_contract_events = encode_contract_events(budget, &events)?;
+        Ok(InvokeHostFunctionResult {
+            encoded_invoke_result,
+            ledger_changes,
+            encoded_contract_events,
+        })
+    } else {
+        Ok(InvokeHostFunctionResult {
+            encoded_invoke_result,
+            ledger_changes: vec![],
+            encoded_contract_events: vec![],
+        })
+    }
+}
+
+/// Lazy-XDR variant of [`invoke_host_function`].
+///
+/// Accepts pre-validated lazy XDR handles instead of raw byte buffers,
+/// eliminating the XDR-parsing step at the embedder boundary.  Lazy handles
+/// are zero-copy views into `Arc<[u8]>` buffers that defer parsing until
+/// individual fields are accessed.
+#[allow(clippy::too_many_arguments)]
+pub fn invoke_host_function_lazy(
+    budget: &Budget,
+    enable_diagnostics: bool,
+    host_fn: LazyHostFunction,
+    resources: LazySorobanResources,
+    restored_rw_entry_indices: &[u32],
+    source_account: &[u8],
+    auth_entries: &[LazySorobanAuthorizationEntry],
+    ledger_info: LedgerInfo,
+    ledger_entries: &[LazyLedgerEntry],
+    ttl_entries: &[LazyTtlEntry],
+    base_prng_seed: &[u8; 32],
+    diagnostic_events: &mut Vec<DiagnosticEvent>,
+    trace_hook: Option<TraceHook>,
+    module_cache: Option<ModuleCache>,
+) -> Result<InvokeHostFunctionResult, HostError> {
+    let _span0 = tracy_span!("invoke_host_function_lazy");
+
+    let lazy_footprint = resources.footprint();
+    let restored_keys =
+        build_restored_key_set_from_lazy(budget, &lazy_footprint, restored_rw_entry_indices)?;
+    let footprint = build_storage_footprint_from_lazy(budget, &lazy_footprint)?;
+    let current_ledger_seq = ledger_info.sequence_number;
+    let min_live_until_ledger = ledger_info
+        .min_live_until_ledger_checked(ContractDataDurability::Persistent)
+        .ok_or_else(|| {
+            HostError::from(Error::from_type_and_code(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+            ))
+        })?;
+    let (storage_map, init_ttl_map) = build_storage_map_from_lazy_entries(
+        budget,
+        &footprint,
+        ledger_entries,
+        ttl_entries,
+        current_ledger_seq,
+    )?;
+
+    let init_storage_map = storage_map.metered_clone(budget)?;
+
+    let storage = Storage::with_enforcing_footprint_and_map(footprint, storage_map);
+    let host = Host::with_storage_and_budget(storage, budget.clone());
+    let have_trace_hook = trace_hook.is_some();
+    if let Some(th) = trace_hook {
+        host.set_trace_hook(Some(th))?;
+    }
+    // Convert lazy auth entries to eager — the auth manager needs full access
+    // to credential fields for signature verification.
+    let eager_auth: Vec<SorobanAuthorizationEntry> = auth_entries
+        .iter()
+        .map(|lazy| {
+            SorobanAuthorizationEntry::try_from(lazy).map_err(|_| {
+                HostError::from(Error::from_type_and_code(
+                    ScErrorType::Value,
+                    ScErrorCode::InvalidInput,
+                ))
+            })
+        })
+        .metered_collect::<Result<Vec<SorobanAuthorizationEntry>, HostError>>(
+            host.as_budget(),
+        )??;
+    // Convert lazy host function to eager — invoke_function destructures it.
+    let host_function: HostFunction = HostFunction::try_from(&host_fn).map_err(|_| {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Value,
+            ScErrorCode::InvalidInput,
+        ))
+    })?;
+    let source_account_id: AccountId = host.metered_from_xdr(source_account)?;
+    host.set_source_account(source_account_id)?;
+    host.set_ledger_info(ledger_info)?;
+    host.set_authorization_entries(eager_auth)?;
+    host.set_base_prng_seed(*base_prng_seed)?;
+    if enable_diagnostics {
+        host.set_diagnostic_level(DiagnosticLevel::Debug)?;
+    }
+    if let Some(module_cache) = module_cache {
+        host.set_module_cache(module_cache)?;
+    }
+    let result = {
+        let _span1 = tracy_span!("Host::invoke_function");
+        host.invoke_function(host_function)
+    };
+    if have_trace_hook {
+        host.set_trace_hook(None)?;
+    }
+    let (storage, events) = host.try_finish()?;
+    if enable_diagnostics {
+        extract_diagnostic_events(&events, diagnostic_events);
+    }
+    let encoded_invoke_result = result.and_then(|res| {
+        let mut encoded_result_sc_val = vec![];
+        metered_write_xdr(budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
+    });
+    if encoded_invoke_result.is_ok() {
+        let init_storage_snapshot = StorageMapSnapshotSource {
+            budget,
+            map: &init_storage_map,
+        };
+        let ledger_changes = get_ledger_changes_lazy(
+            budget,
+            &storage,
+            &init_storage_snapshot,
+            init_ttl_map,
+            min_live_until_ledger,
+            &restored_keys,
         )?;
         let encoded_contract_events = encode_contract_events(budget, &events)?;
         Ok(InvokeHostFunctionResult {
@@ -1229,4 +1361,208 @@ impl SnapshotSource for StorageMapSnapshotSource<'_> {
             Ok(None)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lazy-XDR helper functions
+// ---------------------------------------------------------------------------
+
+/// Build a footprint directly from a [`LazyLedgerFootprint`], avoiding the
+/// eager `SorobanResources` decode.
+fn build_storage_footprint_from_lazy(
+    budget: &Budget,
+    footprint: &LazyLedgerFootprint,
+) -> Result<Footprint, HostError> {
+    let mut footprint_map = FootprintMap::new();
+
+    for key in footprint.read_write().iter() {
+        Storage::check_supported_lazy_ledger_key_type(&key)?;
+        footprint_map = footprint_map.insert(key, AccessType::ReadWrite, budget)?;
+    }
+    for key in footprint.read_only().iter() {
+        Storage::check_supported_lazy_ledger_key_type(&key)?;
+        footprint_map = footprint_map.insert(key, AccessType::ReadOnly, budget)?;
+    }
+    Ok(Footprint(footprint_map))
+}
+
+/// Build the restored-key set from a lazy footprint's read-write keys.
+fn build_restored_key_set_from_lazy(
+    budget: &Budget,
+    footprint: &LazyLedgerFootprint,
+    restored_rw_entry_indices: &[u32],
+) -> Result<Option<RestoredKeySet>, HostError> {
+    if restored_rw_entry_indices.is_empty() {
+        return Ok(None);
+    }
+    let rw_keys = footprint.read_write();
+    let mut key_set = RestoredKeySet::default();
+    for idx in restored_rw_entry_indices {
+        let key = rw_keys.get(*idx).ok_or_else(|| {
+            HostError::from(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            ))
+        })?;
+        key_set = key_set.insert(key, (), budget)?;
+    }
+    Ok(Some(key_set))
+}
+
+/// Build a storage map from pre-existing lazy ledger entry and TTL handles.
+///
+/// Unlike [`build_storage_map_from_xdr_ledger_entries`] this takes already-
+/// validated lazy handles and does not need to parse raw XDR byte buffers.
+fn build_storage_map_from_lazy_entries(
+    budget: &Budget,
+    footprint: &Footprint,
+    ledger_entries: &[LazyLedgerEntry],
+    ttl_entries: &[LazyTtlEntry],
+    ledger_num: u32,
+) -> Result<(StorageMap, LazyTtlEntryMap), HostError> {
+    let mut storage_map = StorageMap::new();
+    let mut ttl_map = LazyTtlEntryMap::new();
+
+    if ledger_entries.len() != ttl_entries.len() {
+        return Err(
+            Error::from_type_and_code(ScErrorType::Storage, ScErrorCode::InternalError).into(),
+        );
+    }
+
+    let xdr_err = || {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+        ))
+    };
+
+    for (lazy_entry, lazy_ttl) in ledger_entries.iter().zip(ttl_entries.iter()) {
+        let mut live_until_ledger: Option<u32> = None;
+
+        let lazy_key = lazy_ledger_entry_to_lazy_ledger_key(lazy_entry)?;
+
+        // A non-empty TTL entry is signalled by a non-zero-length handle.
+        if !lazy_ttl.as_ref().is_empty() {
+            let ttl_live_until = lazy_ttl.live_until_ledger_seq();
+            if ttl_live_until < ledger_num {
+                return Err(xdr_err());
+            }
+            live_until_ledger = Some(ttl_live_until);
+            ttl_map = ttl_map.insert(lazy_key.clone(), lazy_ttl.clone(), budget)?;
+        } else {
+            let disc = lazy_entry.data().discriminant();
+            if disc == LedgerEntryType::ContractData || disc == LedgerEntryType::ContractCode {
+                return Err(xdr_err());
+            }
+        }
+
+        if !footprint.0.contains_key::<LazyLedgerKey>(&lazy_key, budget)? {
+            return Err(xdr_err());
+        }
+        storage_map = storage_map.insert(
+            lazy_key,
+            Some((lazy_entry.clone(), live_until_ledger)),
+            budget,
+        )?;
+    }
+
+    // Add non-existing entries from the footprint to the storage.
+    for k in footprint.0.keys(budget)? {
+        if !storage_map.contains_key::<LazyLedgerKey>(k, budget)? {
+            storage_map = storage_map.insert(k.clone(), None, budget)?;
+        }
+    }
+    Ok((storage_map, ttl_map))
+}
+
+/// Variant of [`get_ledger_changes`] that works with [`LazyTtlEntryMap`].
+fn get_ledger_changes_lazy(
+    budget: &Budget,
+    storage: &Storage,
+    init_storage_snapshot: &(impl SnapshotSource + ?Sized),
+    init_ttl_entries: LazyTtlEntryMap,
+    min_live_until_ledger: u32,
+    restored_keys: &Option<RestoredKeySet>,
+) -> Result<Vec<LedgerEntryChange>, HostError> {
+    let internal_error = || {
+        HostError::from(Error::from_type_and_code(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+        ))
+    };
+    let footprint_map = &storage.footprint.0;
+    let mut changes = Vec::new();
+    for (key, entry_with_live_until_ledger) in storage.map.iter(budget)? {
+        let mut entry_change = LedgerEntryChange::default();
+        entry_change.encoded_key = key.as_ref().as_slice().to_vec();
+        let durability = crate::ledger_info::get_lazy_key_durability(key);
+
+        if let Some(durability) = durability {
+            let key_hash = match init_ttl_entries.get::<LazyLedgerKey>(key, budget)? {
+                Some(ttl_entry) => ttl_entry.key_hash().as_ref().as_slice().to_vec(),
+                None => sha256_hash_from_bytes(entry_change.encoded_key.as_slice(), budget)?,
+            };
+
+            entry_change.ttl_change = Some(LedgerEntryLiveUntilChange {
+                key_hash,
+                entry_type: key.discriminant(),
+                durability,
+                old_live_until_ledger: 0,
+                new_live_until_ledger: 0,
+            });
+        }
+        let entry_with_live_until = init_storage_snapshot.get(key)?;
+        if let Some((old_entry, old_live_until_ledger)) = entry_with_live_until {
+            let buf = old_entry.as_ref().as_slice().to_vec();
+            entry_change.old_entry_size_bytes_for_rent =
+                lazy_entry_size_for_rent(budget, &old_entry, saturating_usize_to_u32(buf.len()))?;
+
+            if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
+                ttl_change.old_live_until_ledger =
+                    old_live_until_ledger.ok_or_else(internal_error)?;
+            }
+        }
+        if let Some((_, new_live_until_ledger)) = entry_with_live_until_ledger {
+            if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
+                ttl_change.new_live_until_ledger = max(
+                    new_live_until_ledger.ok_or_else(internal_error)?,
+                    ttl_change.old_live_until_ledger,
+                );
+            }
+        }
+        let maybe_access_type: Option<AccessType> =
+            footprint_map.get::<LazyLedgerKey>(key, budget)?.copied();
+        match maybe_access_type {
+            Some(AccessType::ReadOnly) => {
+                entry_change.read_only = true;
+            }
+            Some(AccessType::ReadWrite) => {
+                if let Some((entry, _)) = entry_with_live_until_ledger {
+                    let entry_buf = entry.as_ref().as_slice().to_vec();
+                    entry_change.new_entry_size_bytes_for_rent = lazy_entry_size_for_rent(
+                        budget,
+                        &entry,
+                        saturating_usize_to_u32(entry_buf.len()),
+                    )?;
+                    entry_change.encoded_new_value = Some(entry_buf);
+
+                    if let Some(restored_keys) = &restored_keys {
+                        if restored_keys.contains_key::<LazyLedgerKey>(key, budget)? {
+                            entry_change.old_entry_size_bytes_for_rent = 0;
+                            if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
+                                ttl_change.old_live_until_ledger = 0;
+                                ttl_change.new_live_until_ledger =
+                                    max(ttl_change.new_live_until_ledger, min_live_until_ledger);
+                            }
+                        }
+                    }
+                }
+            }
+            None => {
+                return Err(internal_error());
+            }
+        }
+        changes.push(entry_change);
+    }
+    Ok(changes)
 }
