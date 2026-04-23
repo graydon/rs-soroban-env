@@ -385,6 +385,33 @@ impl Host {
         Ok(Err(lo))
     }
 
+    /// Lazy binary search on a LazyScMap. Compares keys using `Compare<LazyScVal>`
+    /// which works directly on serialized XDR bytes without deserialization.
+    /// Returns Ok(idx) if found, Err(idx) for insertion point.
+    pub(crate) fn lazy_scmap_find(
+        &self,
+        map: &xdr::LazyScMap,
+        key: &LazyScVal,
+    ) -> Result<Result<usize, usize>, HostError> {
+        let count = map.element_count() as usize;
+        let mut lo = 0usize;
+        let mut hi = count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let entry = map.get(mid as u32).ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds))
+            })?;
+            let entry_key = entry.key();
+            let cmp: Ordering = self.compare(&entry_key, key)?;
+            match cmp {
+                Ordering::Less => lo = mid + 1,
+                Ordering::Greater => hi = mid,
+                Ordering::Equal => return Ok(Ok(mid)),
+            }
+        }
+        Ok(Err(lo))
+    }
+
     // ----- Comparison support for lazy objects -----
 
     /// Compare a lazy object to a small Val of matching type.

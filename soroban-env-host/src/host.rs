@@ -1743,10 +1743,15 @@ impl VmCallerEnv for Host {
         m: MapObject,
         k: Val,
     ) -> Result<Val, HostError> {
-        let entries = self.scmap_from_obj(m)?;
-        let k_scval = self.from_host_val(k)?;
-        match self.scmap_find(&entries, &k_scval)? {
-            Ok(idx) => self.to_host_val(&entries[idx].val),
+        let lazy = self.get_lazy_obj(m)?;
+        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let k_lazy = self.lazy_from_host_val(k)?;
+        match self.lazy_scmap_find(&sm, &k_lazy)? {
+            Ok(idx) => {
+                let entry = sm.get(idx as u32).ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds)))?;
+                self.lazy_scval_to_host_val(&entry.val())
+            }
             Err(_) => Err(self.err(
                 ScErrorType::Object,
                 ScErrorCode::MissingValue,
@@ -1791,9 +1796,11 @@ impl VmCallerEnv for Host {
         m: MapObject,
         k: Val,
     ) -> Result<Bool, HostError> {
-        let entries = self.scmap_from_obj(m)?;
-        let k_scval = self.from_host_val(k)?;
-        Ok(self.scmap_find(&entries, &k_scval)?.is_ok().into())
+        let lazy = self.get_lazy_obj(m)?;
+        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let k_lazy = self.lazy_from_host_val(k)?;
+        Ok(self.lazy_scmap_find(&sm, &k_lazy)?.is_ok().into())
     }
 
     fn map_key_by_pos(
@@ -1803,12 +1810,14 @@ impl VmCallerEnv for Host {
         i: U32Val,
     ) -> Result<Val, HostError> {
         let i: u32 = i.into();
-        let entries = self.scmap_from_obj(m)?;
-        let entry = entries.get(i as usize).ok_or_else(|| self.err(
+        let lazy = self.get_lazy_obj(m)?;
+        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let entry = sm.get(i).ok_or_else(|| self.err(
             ScErrorType::Object, ScErrorCode::IndexBounds,
             "map index out of bounds", &[],
         ))?;
-        self.to_host_val(&entry.key)
+        self.lazy_scval_to_host_val(&entry.key())
     }
 
     fn map_val_by_pos(
@@ -1818,12 +1827,14 @@ impl VmCallerEnv for Host {
         i: U32Val,
     ) -> Result<Val, HostError> {
         let i: u32 = i.into();
-        let entries = self.scmap_from_obj(m)?;
-        let entry = entries.get(i as usize).ok_or_else(|| self.err(
+        let lazy = self.get_lazy_obj(m)?;
+        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let entry = sm.get(i).ok_or_else(|| self.err(
             ScErrorType::Object, ScErrorCode::IndexBounds,
             "map index out of bounds", &[],
         ))?;
-        self.to_host_val(&entry.val)
+        self.lazy_scval_to_host_val(&entry.val())
     }
 
     fn map_keys(
@@ -2158,10 +2169,12 @@ impl VmCallerEnv for Host {
         v: VecObject,
         x: Val,
     ) -> Result<Val, Self::Error> {
-        let elems = self.scvec_from_obj(v)?;
-        let x_scval = self.from_host_val(x)?;
-        for (i, elem) in elems.iter().enumerate() {
-            if self.as_budget().compare(&x_scval, elem)? == Ordering::Equal {
+        let lazy_vec = self.get_lazy_obj(v)?;
+        let lv = lazy_vec.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let x_lazy = self.lazy_from_host_val(x)?;
+        for (i, elem) in sv.iter().enumerate() {
+            if self.compare(&x_lazy, &elem)? == Ordering::Equal {
                 return Ok(self.usize_to_u32val(i)?.into());
             }
         }
@@ -2174,14 +2187,21 @@ impl VmCallerEnv for Host {
         v: VecObject,
         x: Val,
     ) -> Result<Val, Self::Error> {
-        let elems = self.scvec_from_obj(v)?;
-        let x_scval = self.from_host_val(x)?;
-        for (i, elem) in elems.iter().enumerate().rev() {
-            if self.as_budget().compare(&x_scval, elem)? == Ordering::Equal {
-                return Ok(self.usize_to_u32val(i)?.into());
+        let lazy_vec = self.get_lazy_obj(v)?;
+        let lv = lazy_vec.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let x_lazy = self.lazy_from_host_val(x)?;
+        let count = sv.element_count();
+        let mut result = None;
+        for (i, elem) in sv.iter().enumerate() {
+            if self.compare(&x_lazy, &elem)? == Ordering::Equal {
+                result = Some(i);
             }
         }
-        Ok(Val::VOID.into())
+        match result {
+            Some(i) => Ok(self.usize_to_u32val(i)?.into()),
+            None => Ok(Val::VOID.into()),
+        }
     }
 
     fn vec_binary_search(
@@ -2190,14 +2210,17 @@ impl VmCallerEnv for Host {
         v: VecObject,
         x: Val,
     ) -> Result<u64, Self::Error> {
-        let elems = self.scvec_from_obj(v)?;
-        let x_scval = self.from_host_val(x)?;
-        // Manual binary search with budget-metered comparison
+        let lazy_vec = self.get_lazy_obj(v)?;
+        let lv = lazy_vec.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let x_lazy = self.lazy_from_host_val(x)?;
+        let count = sv.element_count() as usize;
         let mut lo = 0usize;
-        let mut hi = elems.len();
+        let mut hi = count;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            match self.as_budget().compare(&elems[mid], &x_scval)? {
+            let elem = sv.get(mid as u32).ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds)))?;
+            match self.compare(&elem, &x_lazy)? {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
                 Ordering::Equal => {

@@ -192,13 +192,17 @@ impl Host {
 
     pub(crate) fn call_args_from_obj(&self, args: VecObject) -> Result<Vec<Val>, HostError> {
         let lazy = self.get_lazy_obj(Object::try_from(args.to_val()).unwrap())?;
-        let scval = ScVal::try_from(&lazy).map_err(|_| {
-            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        let lv = lazy.as_vec().ok_or_else(|| {
+            HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
         })?;
-        match scval {
-            ScVal::Vec(Some(v)) => self.scvals_to_val_vec(v.as_slice()),
-            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        let sv = lv.get().ok_or_else(|| {
+            HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+        })?;
+        let mut vals = Vec::with_capacity(sv.element_count() as usize);
+        for elem in sv.iter() {
+            vals.push(self.lazy_scval_to_host_val(&elem)?);
         }
+        Ok(vals)
     }
 
     // Metering: covered by vals_to_vec
@@ -268,13 +272,12 @@ impl Host {
 
     pub fn scaddress_from_address(&self, address: AddressObject) -> Result<ScAddress, HostError> {
         let lazy = self.get_lazy_obj(Object::try_from(address.to_val()).unwrap())?;
-        let scval = ScVal::try_from(&lazy).map_err(|_| {
-            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        let la = lazy.as_address().ok_or_else(|| {
+            HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
         })?;
-        match scval {
-            ScVal::Address(addr) => Ok(addr),
-            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
-        }
+        ScAddress::try_from(&la).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })
     }
 
     pub(crate) fn scsymbol_from_symbol(&self, symbol: Symbol) -> Result<ScSymbol, HostError> {
@@ -667,6 +670,22 @@ impl Host {
         }
     }
 
+    /// Convert a host Val to a LazyScVal for comparison purposes.
+    /// For object-typed Vals, this is a cheap Arc clone of the stored LazyScVal.
+    /// For small Vals, this constructs a LazyScVal by serializing the value.
+    pub(crate) fn lazy_from_host_val(&self, val: Val) -> Result<xdr::LazyScVal, HostError> {
+        if let Ok(obj) = Object::try_from(val) {
+            // Object: just get the stored lazy representation (Arc clone)
+            self.get_lazy_obj(obj)
+        } else {
+            // Small value: convert to ScVal, then serialize to LazyScVal
+            let scval = self.from_host_val(val)?;
+            xdr::LazyScVal::try_from(&scval).map_err(|_| {
+                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+            })
+        }
+    }
+
     pub(crate) fn from_host_obj(&self, ob: impl Into<Object>) -> Result<ScValObject, HostError> {
         unsafe {
             let objref: Object = ob.into();
@@ -675,10 +694,7 @@ impl Host {
             // Check for muxed address restriction in storage key context
             if *self.try_borrow_storage_key_conversion_active()? {
                 if let Some(addr) = lazy.as_address() {
-                    let scval = ScVal::try_from(&lazy).map_err(|_| {
-                        HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-                    })?;
-                    if let ScVal::Address(ScAddress::MuxedAccount(_)) = &scval {
+                    if addr.discriminant() == xdr::ScAddressType::MuxedAccount {
                         return Err(self.err(
                             ScErrorType::Storage,
                             ScErrorCode::InvalidInput,
