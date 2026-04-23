@@ -9,11 +9,13 @@ use crate::{
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeEntry, ContractDataDurability,
         ContractDataEntry, ContractExecutable, ContractId, ContractIdPreimage, ExtensionPoint,
-        Hash, HashIdPreimage, HashIdPreimageContractId, LazyLedgerEntry, LazyLedgerKey, LedgerEntry,
-        LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
-        LedgerKeyContractData, LedgerKeyTrustLine, PublicKey, ScAddress, ScContractInstance,
-        ScErrorCode, ScErrorType, ScMap, ScVal, Signer, SignerKey, ThresholdIndexes,
-        TrustLineAsset, Uint256,
+        Hash, HashIdPreimage, HashIdPreimageContractId,
+        LazyLedgerEntry, LazyLedgerKey, LedgerEntry,
+        LedgerEntryData, LedgerEntryExt, LedgerEntryType, LedgerKey, LedgerKeyAccount,
+        LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, PublicKey,
+        ScAddress, ScContractInstance, ScErrorCode, ScErrorType, ScMap, ScVal, ScValType,
+        Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
+        ContractCodeCostInputs, LazyScContractInstance,
     },
     AddressObject, Env, ErrorHandler, Host, HostError, StorageType, U32Val, Val,
 };
@@ -112,10 +114,35 @@ impl Host {
     pub(crate) fn retrieve_contract_instance_from_storage(
         &self,
         key: &LazyLedgerKey,
-    ) -> Result<ScContractInstance, HostError> {
+    ) -> Result<LazyScContractInstance, HostError> {
         let lazy_entry = self.try_borrow_storage_mut()?.get(key, self, None)?;
-        let entry = storage::from_lazy_entry(&lazy_entry)?;
-        self.extract_contract_instance_from_ledger_entry(&entry)
+        // Use lazy accessors: entry.data → contract_data → val → contract_instance
+        let data = lazy_entry.data();
+        let contract_data = data.as_contract_data().ok_or_else(|| {
+            self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "expected ContractData ledger entry",
+                &[],
+            )
+        })?;
+        let val = contract_data.val();
+        if val.discriminant() != ScValType::ContractInstance {
+            return Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "ledger entry for contract instance does not contain contract instance",
+                &[],
+            ));
+        }
+        val.as_contract_instance().ok_or_else(|| {
+            self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "failed to extract lazy contract instance",
+                &[],
+            )
+        })
     }
 
     pub(crate) fn contract_code_ledger_key(
@@ -133,29 +160,73 @@ impl Host {
     ) -> Result<(BytesM, VersionedContractCodeCostInputs), HostError> {
         let key = self.contract_code_ledger_key(wasm_hash)?;
         let lazy_entry = self.try_borrow_storage_mut()?.get(&key, self, None)?;
-        let entry = storage::from_lazy_entry(&lazy_entry)?;
-        match &entry.data {
-            LedgerEntryData::ContractCode(e) => {
-                let code = e.code.metered_clone(self)?;
-                let costs = match &e.ext {
-                    crate::xdr::ContractCodeEntryExt::V0 => VersionedContractCodeCostInputs::V0 {
-                        wasm_bytes: code.len(),
-                    },
+        // Use lazy accessors: entry.data → contract_code → code/ext
+        let data = lazy_entry.data();
+        let lazy_code = data.as_contract_code().ok_or_else(|| {
+            err!(
+                self,
+                (ScErrorType::Storage, ScErrorCode::InternalError),
+                "expected ContractCode ledger entry",
+                *wasm_hash
+            )
+        })?;
+        // Extract the WASM code bytes from the lazy handle — this copies the bytes
+        let code_bytes = lazy_code.code();
+        let code = BytesM::try_from(code_bytes.as_bytes()).map_err(|_| {
+            err!(
+                self,
+                (ScErrorType::Storage, ScErrorCode::InternalError),
+                "invalid wasm code bytes",
+                *wasm_hash
+            )
+        })?;
+        // Extract cost inputs from the extension
+        let lazy_ext = lazy_code.ext();
+        let costs = match lazy_ext.discriminant_i32() {
+            0 => {
+                // V0: no cost inputs, just wasm bytes length
+                VersionedContractCodeCostInputs::V0 {
+                    wasm_bytes: code.len(),
+                }
+            }
+            1 => {
+                // V1: has cost inputs — deserialize just the ext sub-region
+                let eager_ext =
+                    crate::xdr::ContractCodeEntryExt::try_from(&lazy_ext)
+                    .map_err(|_| {
+                        err!(
+                            self,
+                            (ScErrorType::Storage, ScErrorCode::InternalError),
+                            "failed to parse contract code ext",
+                            *wasm_hash
+                        )
+                    })?;
+                match eager_ext {
                     crate::xdr::ContractCodeEntryExt::V1(v1) => {
                         VersionedContractCodeCostInputs::V1(
                             v1.cost_inputs.metered_clone(self.as_budget())?,
                         )
                     }
-                };
-                Ok((code, costs))
+                    _ => {
+                        return Err(err!(
+                            self,
+                            (ScErrorType::Storage, ScErrorCode::InternalError),
+                            "expected V1 ext",
+                            *wasm_hash
+                        ));
+                    }
+                }
             }
-            _ => Err(err!(
-                self,
-                (ScErrorType::Storage, ScErrorCode::InternalError),
-                "expected ContractCode ledger entry",
-                *wasm_hash
-            )),
-        }
+            _ => {
+                return Err(err!(
+                    self,
+                    (ScErrorType::Storage, ScErrorCode::InternalError),
+                    "unknown contract code ext version",
+                    *wasm_hash
+                ));
+            }
+        };
+        Ok((code, costs))
     }
 
     pub(crate) fn wasm_exists(&self, wasm_hash: &Hash) -> Result<bool, HostError> {
@@ -180,6 +251,7 @@ impl Host {
             let (lazy_current, live_until_ledger) = self
                 .try_borrow_storage_mut()?
                 .get_with_live_until_ledger(key, self, None)?;
+            // COW: must deserialize to modify, then re-serialize
             let mut current = storage::from_lazy_entry(&lazy_current)?;
 
             if let LedgerEntryData::ContractData(ref mut entry) = current.data {
@@ -249,16 +321,16 @@ impl Host {
         threshold: u32,
         extend_to: u32,
     ) -> Result<(), HostError> {
-        match self
+        let lazy_exec = self
             .retrieve_contract_instance_from_storage(&instance_key)?
-            .executable
-        {
-            ContractExecutable::Wasm(wasm_hash) => {
-                let key = self.contract_code_ledger_key(&wasm_hash)?;
-                self.try_borrow_storage_mut()?
-                    .extend_ttl(self, key, threshold, extend_to, None)?;
-            }
-            ContractExecutable::StellarAsset => {}
+            .executable();
+        if let Some(lazy_hash) = lazy_exec.as_wasm() {
+            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
+                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
+            })?;
+            let key = self.contract_code_ledger_key(&wasm_hash)?;
+            self.try_borrow_storage_mut()?
+                .extend_ttl(self, key, threshold, extend_to, None)?;
         }
         Ok(())
     }
@@ -286,22 +358,22 @@ impl Host {
         min_extension: u32,
         max_extension: u32,
     ) -> Result<(), HostError> {
-        match self
+        let lazy_exec = self
             .retrieve_contract_instance_from_storage(instance_key)?
-            .executable
-        {
-            ContractExecutable::Wasm(wasm_hash) => {
-                let key = self.contract_code_ledger_key(&wasm_hash)?;
-                self.try_borrow_storage_mut()?.extend_ttl_v2(
-                    self,
-                    key,
-                    extend_to,
-                    min_extension,
-                    max_extension,
-                    None,
-                )?;
-            }
-            ContractExecutable::StellarAsset => {}
+            .executable();
+        if let Some(lazy_hash) = lazy_exec.as_wasm() {
+            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
+                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
+            })?;
+            let key = self.contract_code_ledger_key(&wasm_hash)?;
+            self.try_borrow_storage_mut()?.extend_ttl_v2(
+                self,
+                key,
+                extend_to,
+                min_extension,
+                max_extension,
+                None,
+            )?;
         }
         Ok(())
     }
@@ -341,16 +413,29 @@ impl Host {
         let acc = self.to_account_key(account_id)?;
         self.with_mut_storage(|storage| {
             let lazy_entry = storage.get(&acc, self, None)?;
-            let entry = storage::from_lazy_entry(&lazy_entry)?;
-            match &entry.data {
-                LedgerEntryData::Account(ae) => ae.metered_clone(self),
-                e => Err(err!(
+            // Use lazy accessor to check discriminant, then deserialize just
+            // the AccountEntry sub-region (not the full LedgerEntry envelope).
+            let data = lazy_entry.data();
+            if data.discriminant() != LedgerEntryType::Account {
+                return Err(err!(
                     self,
                     (ScErrorType::Storage, ScErrorCode::InternalError),
                     "ledger entry is not account",
-                    e.name()
-                )),
+                    data.discriminant().name()
+                ));
             }
+            let lazy_account = data.as_account().ok_or_else(|| {
+                err!(
+                    self,
+                    (ScErrorType::Storage, ScErrorCode::InternalError),
+                    "failed to extract lazy account",
+                    ""
+                )
+            })?;
+            // Deserialize just the AccountEntry sub-region
+            AccountEntry::try_from(&lazy_account).map_err(|_| {
+                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
+            })
         })
     }
 
@@ -497,9 +582,11 @@ impl Host {
         &self,
         address: AddressObject,
     ) -> Result<ContractId, HostError> {
-        self.visit_obj(address, |addr: &ScAddress| {
-            self.contract_id_from_scaddress(addr.metered_clone(self)?)
-        })
+        let scval = self.deserialize_obj(address)?;
+        match scval {
+            ScVal::Address(addr) => self.contract_id_from_scaddress(addr.metered_clone(self)?),
+            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        }
     }
 
     pub(super) fn put_contract_data_into_ledger(
@@ -518,6 +605,7 @@ impl Host {
             let (lazy_current, live_until_ledger) = self
                 .try_borrow_storage_mut()?
                 .get_with_live_until_ledger(&lazy_key, self, Some(k))?;
+            // COW: must deserialize to modify, then re-serialize
             let mut current = storage::from_lazy_entry(&lazy_current)?;
             match current.data {
                 LedgerEntryData::ContractData(ref mut entry) => {
@@ -629,9 +717,13 @@ impl Host {
         contract_id: &ContractId,
     ) -> Result<bool, HostError> {
         let key = self.contract_instance_ledger_key(contract_id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&key)?;
-        let test_contract_executable = ContractExecutable::Wasm(
-            crypto::sha256_hash_from_bytes(&[], self)?
+        let lazy_instance = self.retrieve_contract_instance_from_storage(&key)?;
+        let lazy_exec = lazy_instance.executable();
+        if let Some(lazy_hash) = lazy_exec.as_wasm() {
+            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
+                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+            })?;
+            let test_hash: Hash = crypto::sha256_hash_from_bytes(&[], self)?
                 .try_into()
                 .map_err(|_| {
                     self.err(
@@ -640,9 +732,11 @@ impl Host {
                         "unexpected hash length",
                         &[],
                     )
-                })?,
-        );
-        Ok(test_contract_executable == instance.executable)
+                })?;
+            Ok(wasm_hash == test_hash)
+        } else {
+            Ok(false)
+        }
     }
 
     #[cfg(test)]

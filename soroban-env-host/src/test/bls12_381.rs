@@ -22,14 +22,14 @@ impl Host {
         let mut buf = [0u8; FP_SERIALIZED_SIZE];
         self.serialize_uncompressed_into_slice::<FP_SERIALIZED_SIZE, Fq>(&fp, &mut buf, "Fp")?;
         buf.reverse();
-        self.add_host_object(self.scbytes_from_slice(&buf)?)
+        self.add_obj_bytes(self.scbytes_from_slice(&buf)?)
     }
 
     pub(crate) fn fp2_serialize_into_bytesobj(&self, fp2: &Fq2) -> Result<BytesObject, HostError> {
         let mut buf = [0u8; FP2_SERIALIZED_SIZE];
         self.serialize_uncompressed_into_slice::<FP2_SERIALIZED_SIZE, Fq2>(&fp2, &mut buf, "Fp")?;
         buf.reverse();
-        self.add_host_object(self.scbytes_from_slice(&buf)?)
+        self.add_obj_bytes(self.scbytes_from_slice(&buf)?)
     }
 }
 
@@ -1734,7 +1734,7 @@ fn test_serialization_roundtrip() -> Result<(), HostError> {
             let mut buf = [0; FP_SERIALIZED_SIZE];
             host.serialize_uncompressed_into_slice::<FP_SERIALIZED_SIZE, _>(fp, &mut buf, "Fp")?;
             buf.reverse();
-            let bo = host.add_host_object(host.scbytes_from_slice(&buf)?)?;
+            let bo = host.add_obj_bytes(host.scbytes_from_slice(&buf)?)?;
             let fp_back = host.fp_deserialize_from_bytesobj(bo)?;
             Ok(fp.eq(&fp_back))
         };
@@ -1750,7 +1750,7 @@ fn test_serialization_roundtrip() -> Result<(), HostError> {
             let mut buf = [0; FP2_SERIALIZED_SIZE];
             host.serialize_uncompressed_into_slice::<FP2_SERIALIZED_SIZE, _>(fp2, &mut buf, "Fp2")?;
             buf.reverse();
-            let bo = host.add_host_object(host.scbytes_from_slice(&buf)?)?;
+            let bo = host.add_obj_bytes(host.scbytes_from_slice(&buf)?)?;
             let fp2_back = host.fp2_deserialize_from_bytesobj(bo)?;
             Ok(fp2.eq(&fp2_back))
         };

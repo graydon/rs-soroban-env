@@ -3826,7 +3826,7 @@ fn verify_nested_try_call_rollback() -> Result<(), HostError> {
             .find(|e| {
                 if e.event.type_ == ContractEventType::Contract && e.event.contract_id.is_some() {
                     let address = ScAddress::Contract(e.event.contract_id.clone().unwrap());
-                    let id = test.host.add_host_object(address).unwrap();
+                    let id = test.host.add_obj_address(address).unwrap();
                     test.host.obj_cmp(err_id_obj.to_val(), id.to_val()).unwrap() == 0
                 } else {
                     false

@@ -10,7 +10,6 @@ use crate::{
         common_types::ContractExecutable,
     },
     host::metered_clone::{MeteredClone, MeteredContainer},
-    host_object::HostVec,
     xdr::{
         self, ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2, ScAddress,
         ScErrorCode, ScErrorType,
@@ -50,28 +49,28 @@ impl InvokerContractAuthEntry {
                 let function = AuthorizedFunction::ContractFn(ContractFunction {
                     contract_address: contract_invocation.context.contract.as_object(),
                     function_name: contract_invocation.context.fn_name,
-                    args: host.visit_obj(
-                        contract_invocation.context.args.as_object(),
-                        |v: &HostVec| v.to_vec(host.budget_ref()),
-                    )?,
+                    args: {
+                        let elems = host.scvec_from_obj(contract_invocation.context.args.as_object())?;
+                        elems.into_iter()
+                            .map(|scval| host.to_host_val(&scval))
+                            .collect::<Result<Vec<Val>, _>>()?
+                    },
                 });
                 let mut sub_invocations: Vec<AuthorizedInvocation> = vec![];
-                host.visit_obj(
-                    contract_invocation.sub_invocations.as_object(),
-                    |v: &HostVec| {
-                        Vec::<AuthorizedInvocation>::charge_bulk_init_cpy(
-                            v.len() as u64,
-                            host.as_budget(),
-                        )?;
-                        sub_invocations.reserve(v.len());
-                        for val in v.iter() {
-                            let entry = InvokerContractAuthEntry::try_from_val(host, val)?;
-                            sub_invocations
-                                .push(entry.to_authorized_invocation(host, invoker_contract_addr)?);
-                        }
-                        Ok(())
-                    },
-                )?;
+                {
+                    let elems = host.scvec_from_obj(contract_invocation.sub_invocations.as_object())?;
+                    Vec::<AuthorizedInvocation>::charge_bulk_init_cpy(
+                        elems.len() as u64,
+                        host.as_budget(),
+                    )?;
+                    sub_invocations.reserve(elems.len());
+                    for scval in elems.iter() {
+                        let val = host.to_host_val(scval)?;
+                        let entry = InvokerContractAuthEntry::try_from_val(host, &val)?;
+                        sub_invocations
+                            .push(entry.to_authorized_invocation(host, invoker_contract_addr)?);
+                    }
+                }
                 Ok(AuthorizedInvocation::new(function, sub_invocations))
             }
             InvokerContractAuthEntry::CreateContractHostFn(create_contract_fn) => {

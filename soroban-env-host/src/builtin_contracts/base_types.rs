@@ -2,7 +2,6 @@ use soroban_env_common::{MuxedAddressObject, Tag, TryIntoVal};
 
 use crate::{
     host::{metered_clone::MeteredClone, Host, HostError},
-    host_object::MuxedScAddress,
     xdr::{AccountId, ScAddress, ScErrorCode, ScErrorType},
     AddressObject, BytesObject, Compare, Env, EnvBase, StringObject, TryFromVal, U32Val, Val,
     VecObject,
@@ -333,7 +332,7 @@ impl TryFromVal<Host, ScAddress> for Address {
     type Error = HostError;
 
     fn try_from_val(env: &Host, addr: &ScAddress) -> Result<Self, Self::Error> {
-        let obj = env.add_host_object(addr.clone())?;
+        let obj = env.add_obj_address(addr.clone())?;
         Address::try_from_val(env, &obj)
     }
 }
@@ -364,7 +363,7 @@ impl Address {
     pub(crate) fn from_account(env: &Host, account_id: &AccountId) -> Result<Self, HostError> {
         Address::try_from_val(
             env,
-            &env.add_host_object(ScAddress::Account(
+            &env.add_obj_address(ScAddress::Account(
                 account_id.metered_clone(env.budget_ref())?,
             ))?,
         )
@@ -439,11 +438,11 @@ impl TryFromVal<Host, ScAddress> for MuxedAddress {
     fn try_from_val(env: &Host, addr: &ScAddress) -> Result<Self, Self::Error> {
         match addr {
             ScAddress::MuxedAccount(_) => {
-                let obj = env.add_host_object(MuxedScAddress(addr.clone()))?;
+                let obj = env.add_obj_muxed_address(addr.clone())?;
                 MuxedAddress::try_from_val(env, &obj)
             }
             _ => {
-                let obj = env.add_host_object(addr.clone())?;
+                let obj = env.add_obj_address(addr.clone())?;
                 MuxedAddress::try_from_val(env, &obj)
             }
         }

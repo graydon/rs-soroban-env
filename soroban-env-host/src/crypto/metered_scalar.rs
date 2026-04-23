@@ -1,5 +1,5 @@
 use crate::{
-    host::metered_clone::MeteredClone, xdr::ContractCostType, ConversionError, ErrorHandler, Host,
+    host::metered_clone::MeteredClone, xdr::{ContractCostType, ScVal, ScErrorType, ScErrorCode}, ConversionError, ErrorHandler, Host,
     HostError, TryFromVal, U256Object, U256Small, U256Val, U256,
 };
 use ark_bls12_381::Fr as BlsScalar;
@@ -63,9 +63,14 @@ impl MeteredScalar for BlsScalar {
             Self::from_le_bytes_mod_order(&u64::from(small).to_le_bytes())
         } else {
             let obj: U256Object = sv.try_into()?;
-            host.visit_obj(obj, |u: &U256| {
-                Ok(Self::from_le_bytes_mod_order(&u.to_le_bytes()))
-            })?
+            let scval = host.deserialize_obj(obj)?;
+            match scval {
+                ScVal::U256(parts) => {
+                    let u = crate::num::u256_from_pieces(parts.hi_hi, parts.hi_lo, parts.lo_hi, parts.lo_lo);
+                    Ok::<_, HostError>(Self::from_le_bytes_mod_order(&u.to_le_bytes()))
+                }
+                _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+            }?
         };
         Ok(fr)
     }
@@ -111,9 +116,14 @@ impl MeteredScalar for BnScalar {
             Self::from_le_bytes_mod_order(&u64::from(small).to_le_bytes())
         } else {
             let obj: U256Object = sv.try_into()?;
-            host.visit_obj(obj, |u: &U256| {
-                Ok(Self::from_le_bytes_mod_order(&u.to_le_bytes()))
-            })?
+            let scval = host.deserialize_obj(obj)?;
+            match scval {
+                ScVal::U256(parts) => {
+                    let u = crate::num::u256_from_pieces(parts.hi_hi, parts.hi_lo, parts.lo_hi, parts.lo_lo);
+                    Ok::<_, HostError>(Self::from_le_bytes_mod_order(&u.to_le_bytes()))
+                }
+                _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+            }?
         };
         Ok(fr)
     }

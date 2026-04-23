@@ -1,9 +1,8 @@
 use crate::{
     budget::Budget,
-    host_object::HostVec,
     storage::{Footprint, Storage},
     testutils::{generate_account_id, generate_bytes_array},
-    Host, HostError, MeteredOrdMap,
+    xdr::ScVec, Host, HostError, MeteredOrdMap,
 };
 use soroban_env_common::{Env, Symbol};
 use soroban_test_wasms::COMPLEX;
@@ -41,7 +40,7 @@ fn run_complex() -> Result<(), HostError> {
         host.call(
             contract_id_obj,
             Symbol::try_from_small_str("go")?,
-            host.add_host_object(HostVec::new())?,
+            host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
         )?;
         let realhost: Host = (*host).clone();
         drop(host);
@@ -65,7 +64,7 @@ fn run_complex() -> Result<(), HostError> {
         host.call(
             contract_id_obj,
             Symbol::try_from_small_str("go")?,
-            host.add_host_object(HostVec::new())?,
+            host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
         )?;
     }
     Ok(())

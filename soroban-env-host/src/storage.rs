@@ -916,7 +916,7 @@ impl Host {
             LedgerKey::ContractData(cd) => {
                 if can_create_new_objects {
                     let address_val = self
-                        .add_host_object(cd.contract.metered_clone(self.as_budget())?)?
+                        .add_obj_address(cd.contract.metered_clone(self.as_budget())?)?
                         .into();
                     res.push(address_val);
                 }
@@ -924,7 +924,7 @@ impl Host {
                     ScVal::LedgerKeyContractInstance => (),
                     ScVal::LedgerKeyNonce(n) => {
                         if can_create_new_objects {
-                            res.push(self.add_host_object(n.nonce)?.into());
+                            res.push(self.to_host_val(&ScVal::I64(n.nonce))?);
                         }
                     }
                     _ => {
@@ -937,7 +937,7 @@ impl Host {
             LedgerKey::ContractCode(c) => {
                 if can_create_new_objects {
                     res.push(
-                        self.add_host_object(self.scbytes_from_hash(&c.hash)?)?
+                        self.add_obj_bytes(self.scbytes_from_hash(&c.hash)?)?
                             .into(),
                     );
                 }

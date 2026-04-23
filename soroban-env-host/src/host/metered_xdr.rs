@@ -1,7 +1,7 @@
 use crate::{
     budget::Budget,
     crypto::sha256_hash_from_bytes_raw,
-    xdr::{ContractCostType, Limited, ReadXdr, ScBytes, ScErrorCode, ScErrorType, WriteXdr},
+    xdr::{ContractCostType, Limited, ReadXdr, ScBytes, ScErrorCode, ScErrorType, ScVal, WriteXdr},
     BytesObject, Host, HostError, DEFAULT_XDR_RW_LIMITS,
 };
 use std::io::Write;
@@ -49,7 +49,11 @@ impl Host {
         &self,
         bytes: BytesObject,
     ) -> Result<T, HostError> {
-        self.visit_obj(bytes, |hv: &ScBytes| self.metered_from_xdr(hv.as_slice()))
+        let scval = self.deserialize_obj(bytes)?;
+        match scval {
+            ScVal::Bytes(hv) => self.metered_from_xdr(hv.as_slice()),
+            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        }
     }
 }
 

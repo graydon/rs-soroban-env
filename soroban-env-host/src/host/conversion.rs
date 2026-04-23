@@ -1,4 +1,4 @@
-use crate::host_object::{MemHostObjectType, MuxedScAddress};
+use crate::host_object::MuxedScAddress;
 use crate::{
     budget::{AsBudget, DepthLimiter},
     crypto::metered_scalar::MeteredScalar,
@@ -6,7 +6,7 @@ use crate::{
     host::metered_clone::{
         charge_shallow_copy, MeteredAlloc, MeteredClone, MeteredContainer, MeteredIterator,
     },
-    host_object::{HostMap, HostObject, HostVec},
+    host::metered_map::MeteredOrdMap,
     num::{i256_from_pieces, i256_into_pieces, u256_from_pieces, u256_into_pieces},
     storage,
     xdr::{
@@ -114,17 +114,21 @@ impl Host {
     where
         T: From<[u8; N]>,
     {
-        self.visit_obj(obj, |bytes: &ScBytes| {
-            self.fixed_length_bytes_from_slice(name, bytes.as_slice())
-        })
+        let lazy = self.get_lazy_obj(Object::try_from(obj.to_val()).unwrap())?;
+        let bytes = lazy.as_bytes().ok_or_else(|| {
+            HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+        })?;
+        self.fixed_length_bytes_from_slice(name, bytes.as_bytes())
     }
 
     pub(crate) fn account_id_from_bytesobj(&self, k: BytesObject) -> Result<AccountId, HostError> {
-        self.visit_obj(k, |bytes: &ScBytes| {
-            Ok(AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
-                self.fixed_length_bytes_from_slice("account_id", bytes.as_slice())?,
-            )))
-        })
+        let lazy = self.get_lazy_obj(Object::try_from(k.to_val()).unwrap())?;
+        let bytes = lazy.as_bytes().ok_or_else(|| {
+            HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+        })?;
+        Ok(AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
+            self.fixed_length_bytes_from_slice("account_id", bytes.as_bytes())?,
+        )))
     }
 
     pub(crate) fn storage_key_for_address(
@@ -187,12 +191,26 @@ impl Host {
     }
 
     pub(crate) fn call_args_from_obj(&self, args: VecObject) -> Result<Vec<Val>, HostError> {
-        self.visit_obj(args, |hv: &HostVec| hv.to_vec(self.as_budget()))
+        let lazy = self.get_lazy_obj(Object::try_from(args.to_val()).unwrap())?;
+        let scval = ScVal::try_from(&lazy).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        match scval {
+            ScVal::Vec(Some(v)) => self.scvals_to_val_vec(v.as_slice()),
+            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        }
     }
 
     // Metering: covered by vals_to_vec
     pub(crate) fn vecobject_to_scval_vec(&self, args: VecObject) -> Result<VecM<ScVal>, HostError> {
-        self.visit_obj(args, |hv: &HostVec| self.vals_to_scval_vec(hv.as_slice()))
+        let lazy = self.get_lazy_obj(Object::try_from(args.to_val()).unwrap())?;
+        let scval = ScVal::try_from(&lazy).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        match scval {
+            ScVal::Vec(Some(v)) => Ok(VecM::try_from(v.to_vec())?),
+            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        }
     }
 
     pub(crate) fn vals_to_scval_vec(&self, vals: &[Val]) -> Result<VecM<ScVal>, HostError> {
@@ -221,7 +239,7 @@ impl Host {
         &self,
     ) -> Result<Option<BytesObject>, HostError> {
         if let Some(id) = self.get_current_contract_id_opt_internal()? {
-            let obj = self.add_host_object::<ScBytes>(
+            let obj = self.add_obj_bytes(
                 self.metered_slice_to_vec(id.0.as_slice())?.try_into()?,
             )?;
             Ok(Some(obj))
@@ -249,18 +267,29 @@ impl Host {
     }
 
     pub fn scaddress_from_address(&self, address: AddressObject) -> Result<ScAddress, HostError> {
-        self.visit_obj(address, |addr: &ScAddress| addr.metered_clone(self))
+        let lazy = self.get_lazy_obj(Object::try_from(address.to_val()).unwrap())?;
+        let scval = ScVal::try_from(&lazy).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        match scval {
+            ScVal::Address(addr) => Ok(addr),
+            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        }
     }
 
     pub(crate) fn scsymbol_from_symbol(&self, symbol: Symbol) -> Result<ScSymbol, HostError> {
         if let Ok(sobj) = SymbolObject::try_from(symbol) {
-            self.visit_obj(sobj, |sym: &ScSymbol| sym.metered_clone(self))
+            let lazy = self.get_lazy_obj(Object::try_from(sobj.to_val()).unwrap())?;
+            let lazy_sym = lazy.as_symbol().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
+            Ok(ScSymbol(lazy_sym.as_bytes().to_vec().try_into()?))
         } else {
             self.map_err(ScSymbol::try_from_val(self, &symbol))
         }
     }
 
-    pub(crate) fn host_map_to_scmap(&self, map: &HostMap) -> Result<ScMap, HostError> {
+    pub(crate) fn host_map_to_scmap(&self, map: &MeteredOrdMap<Val, Val, Host>) -> Result<ScMap, HostError> {
         let mut mv = Vec::<ScMapEntry>::with_metered_capacity(map.len(), self)?;
         for (k, v) in map.iter(self)? {
             let key = self.from_host_val(*k)?;
@@ -272,7 +301,7 @@ impl Host {
 
     // This function is almost identical to `host_map_to_scmap`, and should only
     // be used for creating the instance storage map.
-    pub(crate) fn instance_storage_map_to_scmap(&self, map: &HostMap) -> Result<ScMap, HostError> {
+    pub(crate) fn instance_storage_map_to_scmap(&self, map: &MeteredOrdMap<Val, Val, Host>) -> Result<ScMap, HostError> {
         let mut mv = Vec::<ScMapEntry>::with_metered_capacity(map.len(), self)?;
         for (k, v) in map.iter(self)? {
             // This is the only difference point compared to `host_map_to_scmap`:
@@ -293,22 +322,29 @@ impl Host {
     where
         S: MeteredScalar,
     {
-        self.visit_obj(vp, |hv: &HostVec| {
-            let mut scalars: Vec<S> = Vec::with_metered_capacity(hv.len(), self)?;
-            for val in hv.iter() {
-                let u256_val = U256Val::try_from(*val).map_err(|_| {
-                    self.err(
-                        ScErrorType::Crypto,
-                        ScErrorCode::InvalidInput,
-                        "element must be U256Val",
-                        std::slice::from_ref(val),
-                    )
-                })?;
-                let scalar = S::from_u256val(self, u256_val)?;
-                scalars.push(scalar);
-            }
-            Ok(scalars)
-        })
+        let lazy = self.get_lazy_obj(Object::try_from(vp.to_val()).unwrap())?;
+        let scval = ScVal::try_from(&lazy).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        let v = match scval {
+            ScVal::Vec(Some(v)) => v,
+            _ => return Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        };
+        let mut scalars: Vec<S> = Vec::with_metered_capacity(v.len(), self)?;
+        for e in v.iter() {
+            let val = self.to_host_val(e)?;
+            let u256_val = U256Val::try_from(val).map_err(|_| {
+                self.err(
+                    ScErrorType::Crypto,
+                    ScErrorCode::InvalidInput,
+                    "element must be U256Val",
+                    &[val],
+                )
+            })?;
+            let scalar = S::from_u256val(self, u256_val)?;
+            scalars.push(scalar);
+        }
+        Ok(scalars)
     }
 
     /// Convert a Vec of MeteredScalar to a VecObject of U256Val elements
@@ -324,13 +360,15 @@ impl Host {
             .map(|s| s.into_u256val(self))
             .metered_collect::<Result<Vec<_>, HostError>>(self)??;
 
-        let host_vec =
-            HostVec::from_exact_iter(vals.into_iter().map(|v| v.to_val()), self.budget_ref())?;
-
-        self.add_host_object(host_vec)
+        let scvals: Vec<ScVal> = vals
+            .into_iter()
+            .map(|v| self.from_host_val(v.to_val()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let scvec = ScVec(scvals.try_into()?);
+        self.add_obj_vec_scval(scvec)
     }
 
-    /// Convert a VecObject representing a HostVec<HostVec<U256Val>> elements to a Vec<Vec<MeteredScalar>>
+    /// Convert a VecObject representing a Vec<Vec<U256Val>> elements to a Vec<Vec<MeteredScalar>>
     pub(crate) fn metered_scalar_vec_of_vec_from_vecobj<S>(
         &self,
         vp: VecObject,
@@ -338,24 +376,31 @@ impl Host {
     where
         S: MeteredScalar,
     {
-        self.visit_obj(vp, |hv: &HostVec| {
-            let n_rows = hv.len();
-            let mut result = Vec::with_metered_capacity(n_rows, self)?;
-            for row_val in hv.iter() {
-                let row_obj = VecObject::try_from(*row_val).map_err(|_| {
-                    self.err(
-                        ScErrorType::Crypto,
-                        ScErrorCode::InvalidInput,
-                        "poseidon_permutation: row must be a vector",
-                        std::slice::from_ref(row_val),
-                    )
-                })?;
+        let lazy = self.get_lazy_obj(Object::try_from(vp.to_val()).unwrap())?;
+        let scval = ScVal::try_from(&lazy).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        let v = match scval {
+            ScVal::Vec(Some(v)) => v,
+            _ => return Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+        };
+        let n_rows = v.len();
+        let mut result = Vec::with_metered_capacity(n_rows, self)?;
+        for row_scval in v.iter() {
+            let row_val = self.to_host_val(row_scval)?;
+            let row_obj = VecObject::try_from(row_val).map_err(|_| {
+                self.err(
+                    ScErrorType::Crypto,
+                    ScErrorCode::InvalidInput,
+                    "poseidon_permutation: row must be a vector",
+                    &[row_val],
+                )
+            })?;
 
-                let row_vec = self.metered_scalar_vec_from_vecobj::<S>(row_obj)?;
-                result.push(row_vec);
-            }
-            Ok(result)
-        })
+            let row_vec = self.metered_scalar_vec_from_vecobj::<S>(row_obj)?;
+            result.push(row_vec);
+        }
+        Ok(result)
     }
 }
 
@@ -457,201 +502,203 @@ impl Host {
         })
     }
 
+    /// Converts a `LazyScVal` to a `Val` without eagerly deserializing.
+    /// Primitive types that fit directly in a `Val` (bool, void, error,
+    /// u32, i32, small symbols, etc.) are converted immediately.
+    /// Object types (Vec, Map, Bytes, u64, i64, u128, etc.) are wrapped
+    /// in `HostObject::Lazy` and only materialized when the contract
+    /// actually accesses them via typed host functions.
+    pub(crate) fn lazy_scval_to_host_val(
+        &self,
+        lazy: &xdr::LazyScVal,
+    ) -> Result<Val, HostError> {
+        use soroban_env_common::{
+            DurationSmall, Error as ValError, I128Small, I256Small, I64Small, SymbolSmall,
+            TimepointSmall, U128Small, U256Small, U64Small, Void,
+        };
+        use xdr::ScValType;
+        match lazy.discriminant() {
+            ScValType::Bool => {
+                let b = lazy.as_bool().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                Ok(Val::from_bool(b).into())
+            }
+            ScValType::Void => Ok(Val::from_void().into()),
+            ScValType::Error => {
+                // Deserialize just the error (4 bytes)
+                let lazy_err = lazy.as_error().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                let err = xdr::ScError::try_from(&lazy_err).map_err(|_| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                let val_err = ValError::try_from(err).map_err(|_| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                Ok(val_err.to_val())
+            }
+            ScValType::U32 => {
+                let u = lazy.as_u32().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                Ok(Val::from_u32(u).into())
+            }
+            ScValType::I32 => {
+                let i = lazy.as_i32().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                Ok(Val::from_i32(i).into())
+            }
+            ScValType::U64 => {
+                let u = lazy.as_u64().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                if let Ok(small) = U64Small::try_from(u) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::I64 => {
+                let i = lazy.as_i64().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                if let Ok(small) = I64Small::try_from(i) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::Timepoint => {
+                let tp = lazy.as_timepoint().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                if let Ok(small) = TimepointSmall::try_from(*tp) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::Duration => {
+                let d = lazy.as_duration().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                if let Ok(small) = DurationSmall::try_from(*d) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::U128 => {
+                let u = lazy.as_u128().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                let val = int128_helpers::u128_from_pieces(u.hi(), u.lo());
+                if let Ok(small) = U128Small::try_from(val) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::I128 => {
+                let i = lazy.as_i128().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                let val = int128_helpers::i128_from_pieces(i.hi(), i.lo());
+                if let Ok(small) = I128Small::try_from(val) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::U256 => {
+                let u = lazy.as_u256().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                let val = u256_from_pieces(u.hi_hi(), u.hi_lo(), u.lo_hi(), u.lo_lo());
+                if let Ok(small) = U256Small::try_from(val) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::I256 => {
+                let i = lazy.as_i256().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                let val = i256_from_pieces(i.hi_hi(), i.hi_lo(), i.lo_hi(), i.lo_lo());
+                if let Ok(small) = I256Small::try_from(val) {
+                    Ok(small.into())
+                } else {
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            ScValType::Symbol => {
+                // Try small symbol first (up to 9 chars)
+                let lazy_sym = lazy.as_symbol().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
+                let sym_bytes = lazy_sym.as_bytes();
+                if let Ok(small) = SymbolSmall::try_from_bytes(sym_bytes) {
+                    Ok(small.into())
+                } else {
+                    // Large symbol — create lazy host object
+                    Ok(self.add_lazy_obj(lazy.clone())?.into())
+                }
+            }
+            // All other object types: Vec, Map, Bytes, String, Address,
+            // ContractInstance, LedgerKeyNonce — wrap as lazy
+            ScValType::Vec
+            | ScValType::Map
+            | ScValType::Bytes
+            | ScValType::String
+            | ScValType::Address
+            | ScValType::ContractInstance
+            | ScValType::LedgerKeyNonce => {
+                Ok(self.add_lazy_obj(lazy.clone())?.into())
+            }
+            // LedgerKeyContractInstance is a special value, not an object
+            ScValType::LedgerKeyContractInstance => {
+                Ok(ScVal::LedgerKeyContractInstance.try_into_val(self).map_err(
+                    |cerr| self.error(cerr, "failed to convert LedgerKeyContractInstance", &[]),
+                )?)
+            }
+        }
+    }
+
     pub(crate) fn from_host_obj(&self, ob: impl Into<Object>) -> Result<ScValObject, HostError> {
         unsafe {
             let objref: Object = ob.into();
-            self.visit_obj_untyped(objref, |ho| {
-                let val = match ho {
-                    HostObject::Vec(vv) => {
-                        Vec::<ScVal>::charge_bulk_init_cpy(vv.len() as u64, self)?;
-                        let sv = vv.iter().map(|e| self.from_host_val(*e)).collect::<Result<
-                            Vec<ScVal>,
-                            HostError,
-                        >>(
-                        )?;
-                        ScVal::Vec(Some(ScVec(self.map_err(sv.try_into())?)))
+            let lazy = self.get_lazy_obj(objref)?;
+
+            // Check for muxed address restriction in storage key context
+            if *self.try_borrow_storage_key_conversion_active()? {
+                if let Some(addr) = lazy.as_address() {
+                    let scval = ScVal::try_from(&lazy).map_err(|_| {
+                        HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                    })?;
+                    if let ScVal::Address(ScAddress::MuxedAccount(_)) = &scval {
+                        return Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InvalidInput,
+                            "muxed addresses should not be used in the storage keys",
+                            &[objref.to_val()],
+                        ));
                     }
-                    HostObject::Map(mm) => ScVal::Map(Some(self.host_map_to_scmap(mm)?)),
-                    HostObject::U64(u) => {
-                        charge_shallow_copy::<u64>(1, self)?;
-                        ScVal::U64(*u)
-                    }
-                    HostObject::I64(i) => {
-                        charge_shallow_copy::<i64>(1, self)?;
-                        ScVal::I64(*i)
-                    }
-                    HostObject::TimePoint(tp) => ScVal::Timepoint(tp.metered_clone(self)?),
-                    HostObject::Duration(d) => ScVal::Duration(d.metered_clone(self)?),
-                    HostObject::U128(u) => {
-                        charge_shallow_copy::<u128>(1, self)?;
-                        ScVal::U128(UInt128Parts {
-                            hi: int128_helpers::u128_hi(*u),
-                            lo: int128_helpers::u128_lo(*u),
-                        })
-                    }
-                    HostObject::I128(i) => {
-                        charge_shallow_copy::<i128>(1, self)?;
-                        ScVal::I128(Int128Parts {
-                            hi: int128_helpers::i128_hi(*i),
-                            lo: int128_helpers::i128_lo(*i),
-                        })
-                    }
-                    HostObject::U256(u) => {
-                        charge_shallow_copy::<u128>(2, self)?;
-                        let (hi_hi, hi_lo, lo_hi, lo_lo) = u256_into_pieces(*u);
-                        ScVal::U256(UInt256Parts {
-                            hi_hi,
-                            hi_lo,
-                            lo_hi,
-                            lo_lo,
-                        })
-                    }
-                    HostObject::I256(i) => {
-                        charge_shallow_copy::<i128>(2, self)?;
-                        let (hi_hi, hi_lo, lo_hi, lo_lo) = i256_into_pieces(*i);
-                        ScVal::I256(Int256Parts {
-                            hi_hi,
-                            hi_lo,
-                            lo_hi,
-                            lo_lo,
-                        })
-                    }
-                    HostObject::Bytes(b) => ScVal::Bytes(b.metered_clone(self)?),
-                    HostObject::String(s) => ScVal::String(s.metered_clone(self)?),
-                    HostObject::Symbol(s) => ScVal::Symbol(s.metered_clone(self)?),
-                    HostObject::Address(addr) => ScVal::Address(addr.metered_clone(self)?),
-                    HostObject::MuxedAddress(addr) => {
-                        if *self.try_borrow_storage_key_conversion_active()? {
-                            return Err(self.err(
-                                ScErrorType::Storage,
-                                ScErrorCode::InvalidInput,
-                                "muxed addresses should not be used in the storage keys",
-                                &[objref.to_val()],
-                            ));
-                        }
-                        ScVal::Address(addr.0.metered_clone(self)?)
-                    }
-                };
-                Ok(ScValObject::unchecked_from_val(val))
-            })
+                }
+            }
+
+            let scval = ScVal::try_from(&lazy).map_err(|_| {
+                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+            })?;
+            Ok(ScValObject::unchecked_from_val(scval))
         }
     }
 
     pub(crate) fn to_host_obj(&self, ob: &ScValObjRef<'_>) -> Result<Object, HostError> {
         let val: &ScVal = (*ob).into();
-        match val {
-            // Here we have to make sure host object conversion is charged in each variant
-            // below. There is no otherwise ubiquitous metering for ScVal->Val conversion,
-            // since most of them happen in the "common" crate with no access to the host.
-            ScVal::Vec(Some(v)) => {
-                let mut vv = Vec::<Val>::with_metered_capacity(v.len(), self)?;
-                for e in v.iter() {
-                    vv.push(self.to_host_val(e)?)
-                }
-                Ok(self.add_host_object(HostVec::from_vec(vv)?)?.into())
-            }
-            ScVal::Map(Some(m)) => {
-                let mut mm = Vec::<(Val, Val)>::with_metered_capacity(m.len(), self)?;
-                for pair in m.iter() {
-                    let k = self.to_host_val(&pair.key)?;
-                    let v = self.to_host_val(&pair.val)?;
-                    mm.push((k, v))
-                }
-                Ok(self
-                    .add_host_object(HostMap::from_map_with_host(mm, self)?)?
-                    .into())
-            }
-            ScVal::Vec(None) => Err(self.err(
-                ScErrorType::Value,
-                ScErrorCode::InvalidInput,
-                "ScVal::Vec body missing",
-                &[],
-            )),
-            ScVal::Map(None) => Err(self.err(
-                ScErrorType::Value,
-                ScErrorCode::InvalidInput,
-                "ScVal::Map body missing",
-                &[],
-            )),
-            ScVal::U64(u) => {
-                charge_shallow_copy::<u64>(1, self)?;
-                Ok(self.add_host_object(*u)?.into())
-            }
-            ScVal::I64(i) => {
-                charge_shallow_copy::<i64>(1, self)?;
-                Ok(self.add_host_object(*i)?.into())
-            }
-            ScVal::Timepoint(t) => Ok(self.add_host_object(t.metered_clone(self)?)?.into()),
-            ScVal::Duration(d) => Ok(self.add_host_object(d.metered_clone(self)?)?.into()),
-            ScVal::U128(u) => {
-                charge_shallow_copy::<u128>(1, self)?;
-                Ok(self
-                    .add_host_object(int128_helpers::u128_from_pieces(u.hi, u.lo))?
-                    .into())
-            }
-            ScVal::I128(i) => {
-                charge_shallow_copy::<i128>(1, self)?;
-                Ok(self
-                    .add_host_object(int128_helpers::i128_from_pieces(i.hi, i.lo))?
-                    .into())
-            }
-            ScVal::U256(u) => {
-                charge_shallow_copy::<u128>(2, self)?;
-                Ok(self
-                    .add_host_object(u256_from_pieces(u.hi_hi, u.hi_lo, u.lo_hi, u.lo_lo))?
-                    .into())
-            }
-            ScVal::I256(i) => {
-                charge_shallow_copy::<i128>(2, self)?;
-                Ok(self
-                    .add_host_object(i256_from_pieces(i.hi_hi, i.hi_lo, i.lo_hi, i.lo_lo))?
-                    .into())
-            }
-            ScVal::Bytes(b) => Ok(self.add_host_object(b.metered_clone(self)?)?.into()),
-            ScVal::String(s) => Ok(self.add_host_object(s.metered_clone(self)?)?.into()),
-            // Similarly to `ScMap`, not every `SCSymbol` XDR is valid. Thus it has to be
-            // created with the respective fallible conversion method.
-            ScVal::Symbol(s) => Ok(self
-                .add_host_object(ScSymbol::try_from_bytes(
-                    self,
-                    s.0.metered_clone(self.as_budget())?.into(),
-                )?)?
-                .into()),
-
-            ScVal::Address(addr) => {
-                match addr {
-                    ScAddress::Account(_) | ScAddress::Contract(_) => {
-                        Ok(self.add_host_object(addr.metered_clone(self)?)?.into())
-                    }
-                    ScAddress::MuxedAccount(_) => Ok(self
-                        .add_host_object(MuxedScAddress(addr.metered_clone(self)?))?
-                        .into()),
-                    _ => Err(self.err(
-                        ScErrorType::Object,
-                        ScErrorCode::UnexpectedType,
-                        "encountered unsupported ScAddress type",
-                        &[],
-                    )),
-                }
-                // ,
-            }
-
-            // None of the following cases should have made it into this function, they
-            // are excluded by the ScValObjRef::classify function.
-            ScVal::Bool(_)
-            | ScVal::Void
-            | ScVal::Error(_)
-            | ScVal::U32(_)
-            | ScVal::I32(_)
-            | ScVal::LedgerKeyNonce(_)
-            | ScVal::ContractInstance(_)
-            | ScVal::LedgerKeyContractInstance => Err(self.err(
-                ScErrorType::Value,
-                ScErrorCode::InternalError,
-                "converting ScValObjRef on non-object ScVal type",
-                &[],
-            )),
-        }
+        self.add_obj_from_scval(val.clone())
     }
 
     pub(crate) fn non_muxed_sc_address_to_strkey(
@@ -734,19 +781,25 @@ impl Host {
             )
         })?;
 
-        self.visit_obj_untyped(strkey_obj, |key_obj: &HostObject| {
-            let key = match key_obj {
-                HostObject::Bytes(b) => b.as_slice(),
-                HostObject::String(s) => s.as_slice(),
-                _ => {
-                    return Err(self.err(
-                        ScErrorType::Value,
-                        ScErrorCode::UnexpectedType,
-                        "strkey is not a string or bytes object",
-                        &[strkey_obj.to_val()],
-                    ));
-                }
-            };
+        let lazy = self.get_lazy_obj(strkey_obj)?;
+        let scval = ScVal::try_from(&lazy).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        let key: Vec<u8> = match &scval {
+            ScVal::Bytes(b) => b.as_slice().to_vec(),
+            ScVal::String(s) => s.as_slice().to_vec(),
+            _ => {
+                return Err(self.err(
+                    ScErrorType::Value,
+                    ScErrorCode::UnexpectedType,
+                    "strkey is not a string or bytes object",
+                    &[strkey_obj.to_val()],
+                ));
+            }
+        };
+        let key: &[u8] = &key;
+
+        {
             // Expected strkey lengths:
             // - Account/Contract: PAYLOAD_LEN = 32 + 3 = 35 bytes → 56 chars in base32
             // - Muxed account: MUXED_PAYLOAD_LEN = 32 + 8 + 3 = 43 bytes → 69 chars in base32
@@ -810,6 +863,6 @@ impl Host {
                     &[strkey_obj.to_val()],
                 )),
             }
-        })
+        }
     }
 }

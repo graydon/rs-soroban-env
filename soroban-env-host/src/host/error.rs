@@ -380,7 +380,7 @@ impl Host {
                 return Ok(Val::VOID.into());
             }
         };
-        self.add_host_object(ScAddress::Account(
+        self.add_obj_address(ScAddress::Account(
             account_id.metered_clone(self.as_budget())?,
         ))
         .map(|a| a.to_val())

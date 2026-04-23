@@ -406,7 +406,7 @@ fn muxed_address_storage_key_conversion() {
         ed25519: Uint256([7; 32]),
     }));
     let muxed_address_val = host
-        .add_host_object(muxed_address.clone())
+        .add_obj_muxed_address(muxed_address.clone())
         .unwrap()
         .to_val();
     // Conversion for use as a storage key should fail.
@@ -430,7 +430,7 @@ fn test_muxed_account_is_not_allowed_as_storage_key() {
         id: 123,
         ed25519: Uint256([10; 32]),
     }));
-    let muxed_address_val = host.add_host_object(muxed_address.clone()).unwrap();
+    let muxed_address_val = host.add_obj_muxed_address(muxed_address.clone()).unwrap();
 
     let run_test = |storage: &str| {
         // Muxed address can't be used as a storage key.
@@ -474,9 +474,11 @@ fn test_muxed_account_is_not_allowed_as_storage_key() {
             )
             .unwrap();
         let addr_obj = MuxedAddressObject::try_from_val(&host, &v).unwrap();
-        let addr = host
-            .visit_obj(addr_obj, |addr: &MuxedScAddress| Ok(addr.clone()))
-            .unwrap();
+        let scval = host.deserialize_obj(addr_obj).unwrap();
+        let addr = match scval {
+            ScVal::Address(a) => MuxedScAddress(a),
+            _ => panic!("expected address"),
+        };
         assert_eq!(addr, muxed_address);
     };
     run_test("persistent");
@@ -803,13 +805,16 @@ mod ttl_extension_v2_tests {
             .contract_instance_ledger_key(&contract_id_hash)
             .unwrap();
 
-        let code_hash = match &host
-            .retrieve_contract_instance_from_storage(&instance_key)
-            .unwrap()
-            .executable
-        {
-            crate::xdr::ContractExecutable::Wasm(hash) => hash.clone(),
-            _ => panic!("Expected Wasm executable"),
+        let code_hash = {
+            let lazy_instance = host
+                .retrieve_contract_instance_from_storage(&instance_key)
+                .unwrap();
+            let lazy_exec = lazy_instance.executable();
+            if let Some(lazy_hash) = lazy_exec.as_wasm() {
+                crate::xdr::Hash::try_from(&lazy_hash).unwrap()
+            } else {
+                panic!("Expected Wasm executable")
+            }
         };
         let code_key = host.contract_code_ledger_key(&code_hash).unwrap();
 

@@ -117,7 +117,7 @@ fn bytes_xdr_roundtrip() -> Result<(), HostError> {
     };
     let deser_fails_scv = |v: ScVal| -> Result<(), HostError> {
         let bytes: Vec<u8> = v.to_xdr(DEFAULT_XDR_RW_LIMITS)?;
-        let bo = host.add_host_object(ScBytes(bytes.try_into()?))?;
+        let bo = host.add_obj_bytes(ScBytes(bytes.try_into()?))?;
         let res = host.deserialize_from_bytes(bo);
         assert!(res.is_err());
         let err = res.err().unwrap().error;
@@ -296,7 +296,7 @@ fn arbitrary_xdr_roundtrips() -> Result<(), HostError> {
     let mut roundtrip_test = |v: ScVal| -> Result<(), HostError> {
         let bytes: Vec<u8> = v.to_xdr(DEFAULT_XDR_RW_LIMITS)?;
         let scval_bytes_obj = host
-            .add_host_object(ScBytes(bytes.try_into().unwrap()))
+            .add_obj_bytes(ScBytes(bytes.try_into().unwrap()))
             .unwrap();
         // Not every randomly generated ScVal can be converted to `Val` due to non-representable
         // values and invariants like map ordering.
@@ -341,7 +341,7 @@ fn arbitrary_xdr_roundtrips() -> Result<(), HostError> {
 fn test_malformed_xdr_decoding() -> Result<(), HostError> {
     let host = observe_host!(Host::test_host());
     let run_test = |bytes: Vec<u8>| -> Result<(), HostError> {
-        let bo = host.add_host_object(ScBytes(bytes.try_into()?))?;
+        let bo = host.add_obj_bytes(ScBytes(bytes.try_into()?))?;
         let res = host.deserialize_from_bytes(bo);
         assert!(res.is_err());
         Ok(())

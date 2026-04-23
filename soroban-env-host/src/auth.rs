@@ -159,7 +159,6 @@ use crate::{
         metered_hash::{CountingHasher, MeteredHash},
         Frame,
     },
-    host_object::HostVec,
     storage,
     xdr::{
         ContractDataEntry, CreateContractArgsV2, HashIdPreimage,
@@ -599,7 +598,7 @@ impl AuthorizedFunction {
         Ok(match xdr_fn {
             SorobanAuthorizedFunction::ContractFn(xdr_contract_fn) => {
                 AuthorizedFunction::ContractFn(ContractFunction {
-                    contract_address: host.add_host_object(xdr_contract_fn.contract_address)?,
+                    contract_address: host.add_obj_address(xdr_contract_fn.contract_address)?,
                     function_name: Symbol::try_from_val(host, &xdr_contract_fn.function_name)?,
                     args: host.scvals_to_val_vec(xdr_contract_fn.args.as_slice())?,
                 })
@@ -857,8 +856,12 @@ impl AuthorizationManager {
         host: &Host,
         auth_entries: VecObject,
     ) -> Result<(), HostError> {
-        let auth_entries =
-            host.visit_obj(auth_entries, |e: &HostVec| e.to_vec(host.budget_ref()))?;
+        let auth_entries = {
+            let elems = host.scvec_from_obj(auth_entries)?;
+            elems.into_iter()
+                .map(|scval| host.to_host_val(&scval))
+                .collect::<Result<Vec<Val>, _>>()?
+        };
         let mut trackers = self.try_borrow_invoker_contract_trackers_mut(host)?;
         Vec::<InvokerContractAuthorizationTracker>::charge_bulk_init_cpy(
             auth_entries.len() as u64,
@@ -1359,7 +1362,7 @@ impl AuthorizationManager {
             #[cfg(any(test, feature = "testutils"))]
             Frame::TestContract(tc) => (tc.id.metered_clone(host)?, tc.func),
         };
-        let contract_address = host.add_host_object(ScAddress::Contract(contract_id))?;
+        let contract_address = host.add_obj_address(ScAddress::Contract(contract_id))?;
         Vec::<ContractInvocation>::charge_bulk_init_cpy(1, host)?;
         self.try_borrow_call_stack_mut(host)?
             .push(AuthStackFrame::Contract(ContractInvocation {
@@ -1822,7 +1825,7 @@ impl AccountAuthorizationTracker {
                     true,
                 ),
                 SorobanCredentials::Address(address_creds) => (
-                    host.add_host_object(address_creds.address)?,
+                    host.add_obj_address(address_creds.address)?,
                     Some((
                         address_creds.nonce,
                         address_creds.signature_expiration_ledger,
@@ -1968,7 +1971,13 @@ impl AccountAuthorizationTracker {
         host.as_budget().with_observable_shadow_mode(|| {
             Ok(RecordedAuthPayload {
                 address: if !self.is_transaction_source_account {
-                    Some(host.visit_obj(self.address, |a: &ScAddress| a.metered_clone(host))?)
+                    Some({
+                        let scval = host.deserialize_obj(self.address)?;
+                        match scval {
+                            ScVal::Address(a) => a.metered_clone(host)?,
+                            _ => return Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+                        }
+                    })
                 } else {
                     None
                 },
@@ -2243,7 +2252,7 @@ impl InvokerContractAuthorizationTracker {
         )?;
         let invocation_tracker = InvocationTracker::new(authorized_invocation);
         Ok(Self {
-            contract_address: host.add_host_object(invoker_sc_addr)?,
+            contract_address: host.add_obj_address(invoker_sc_addr)?,
             invocation_tracker,
         })
     }

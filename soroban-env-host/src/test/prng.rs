@@ -49,7 +49,7 @@ pub struct PRNGUsingTest;
 impl PRNGUsingTest {
     fn register_as(host: &Host, id: &[u8; 32]) -> AddressObject {
         let scaddr = ScAddress::Contract(ContractId(Hash(*id)));
-        let addrobj = host.add_host_object(scaddr).unwrap();
+        let addrobj = host.add_obj_address(scaddr).unwrap();
         host.register_test_contract(addrobj, std::rc::Rc::new(PRNGUsingTest))
             .unwrap();
         addrobj
@@ -186,7 +186,7 @@ fn prng_test() -> Result<(), HostError> {
 
     let dummy_id = [0; 32];
     let dummy_address = ScAddress::Contract(ContractId(Hash(dummy_id)));
-    let id = host.add_host_object(dummy_address)?;
+    let id = host.add_obj_address(dummy_address)?;
 
     host.register_test_contract(id, std::rc::Rc::new(PRNGUsingTest))?;
     let args = host.test_vec_obj::<i32>(&[1, 2])?;

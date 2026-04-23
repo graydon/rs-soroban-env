@@ -8,18 +8,21 @@ use crate::{
 };
 
 fn extract_string(host: &Host, s: StringObject) -> String {
-    host.visit_obj(s, |st: &ScString| Ok(st.0.to_string()))
-        .unwrap()
+    let scval = host.deserialize_obj(s).unwrap();
+    match scval {
+        ScVal::String(st) => st.0.to_string(),
+        _ => panic!("expected string"),
+    }
 }
 
 fn string_to_object(host: &Host, s: &str) -> Val {
-    host.add_host_object(ScString(s.try_into().unwrap()))
+    host.add_obj_string(ScString(s.try_into().unwrap()))
         .unwrap()
         .to_val()
 }
 
 fn string_to_bytes_object(host: &Host, s: &str) -> Val {
-    host.add_host_object(ScBytes(s.try_into().unwrap()))
+    host.add_obj_bytes(ScBytes(s.try_into().unwrap()))
         .unwrap()
         .to_val()
 }
@@ -28,12 +31,12 @@ fn string_to_bytes_object(host: &Host, s: &str) -> Val {
 fn test_muxed_address_to_components_conversion() {
     let host = observe_host!(Host::test_host());
     let muxed_address_obj = host
-        .add_host_object(MuxedScAddress(ScAddress::MuxedAccount(
+        .add_obj_muxed_address(ScAddress::MuxedAccount(
             MuxedEd25519Account {
                 id: 123,
                 ed25519: Uint256([10; 32]),
             },
-        )))
+        ))
         .unwrap();
     let address = host
         .get_address_from_muxed_address(muxed_address_obj)
@@ -54,30 +57,30 @@ fn test_muxed_address_to_components_conversion() {
 fn test_invalid_muxed_address_object_conversions() {
     let host = observe_host!(Host::test_host());
     assert!(HostError::result_matches_err(
-        host.add_host_object(MuxedScAddress(ScAddress::Account(AccountId(
+        host.add_obj_muxed_address(ScAddress::Account(AccountId(
             PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])),
+        ))),
+        (ScErrorType::Object, ScErrorCode::InvalidInput)
+    ));
+
+    assert!(HostError::result_matches_err(
+        host.add_obj_muxed_address(ScAddress::Contract(ContractId(Hash(
+            [100; 32]
         )))),
         (ScErrorType::Object, ScErrorCode::InvalidInput)
     ));
 
     assert!(HostError::result_matches_err(
-        host.add_host_object(MuxedScAddress(ScAddress::Contract(ContractId(Hash(
-            [100; 32]
-        ))))),
-        (ScErrorType::Object, ScErrorCode::InvalidInput)
-    ));
-
-    assert!(HostError::result_matches_err(
-        host.add_host_object(MuxedScAddress(ScAddress::LiquidityPool(PoolId(Hash(
+        host.add_obj_muxed_address(ScAddress::LiquidityPool(PoolId(Hash(
             [66; 32],
-        ))))),
+        )))),
         (ScErrorType::Object, ScErrorCode::InvalidInput)
     ));
 
     assert!(HostError::result_matches_err(
-        host.add_host_object(MuxedScAddress(ScAddress::ClaimableBalance(
+        host.add_obj_muxed_address(ScAddress::ClaimableBalance(
             ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([5; 32]))
-        ))),
+        )),
         (ScErrorType::Object, ScErrorCode::InvalidInput)
     ));
 }
@@ -87,7 +90,7 @@ fn test_invalid_address_object_conversions() {
     let host = observe_host!(Host::test_host());
 
     assert!(HostError::result_matches_err(
-        host.add_host_object(ScAddress::MuxedAccount(MuxedEd25519Account {
+        host.add_obj_address(ScAddress::MuxedAccount(MuxedEd25519Account {
             id: 123,
             ed25519: Uint256([10; 32]),
         },)),
@@ -95,12 +98,12 @@ fn test_invalid_address_object_conversions() {
     ));
 
     assert!(HostError::result_matches_err(
-        host.add_host_object(ScAddress::LiquidityPool(PoolId(Hash([66; 32],)))),
+        host.add_obj_address(ScAddress::LiquidityPool(PoolId(Hash([66; 32],)))),
         (ScErrorType::Object, ScErrorCode::InvalidInput)
     ));
 
     assert!(HostError::result_matches_err(
-        host.add_host_object(ScAddress::ClaimableBalance(
+        host.add_obj_address(ScAddress::ClaimableBalance(
             ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([5; 32]))
         )),
         (ScErrorType::Object, ScErrorCode::InvalidInput)
@@ -124,7 +127,7 @@ fn run_test_account_address_conversions<F, G>(
         0xe8, 0x9a,
     ];
     let address_obj = host
-        .add_host_object(ScAddress::Account(AccountId(
+        .add_obj_address(ScAddress::Account(AccountId(
             PublicKey::PublicKeyTypeEd25519(Uint256(account_pk)),
         )))
         .unwrap();
@@ -168,7 +171,7 @@ fn run_test_contract_address_conversions<F, G>(
         0xe8, 0x9a,
     ];
     let address_obj = host
-        .add_host_object(ScAddress::Contract(ContractId(Hash(contract_id))))
+        .add_obj_address(ScAddress::Contract(ContractId(Hash(contract_id))))
         .unwrap();
 
     let strkey = address_to_strkey(host, address_obj);
@@ -357,7 +360,7 @@ where
     let invalid_utf8_lone_continuation: [u8; 56] = [0x80; 56];
     assert!(strkey_to_address(
         host,
-        host.add_host_object(ScBytes(invalid_utf8_lone_continuation.try_into().unwrap()))
+        host.add_obj_bytes(ScBytes(invalid_utf8_lone_continuation.try_into().unwrap()))
             .unwrap()
             .to_val(),
     )
@@ -368,7 +371,7 @@ where
     invalid_utf8_overlong[1] = 0x80;
     assert!(strkey_to_address(
         host,
-        host.add_host_object(ScBytes(invalid_utf8_overlong.try_into().unwrap()))
+        host.add_obj_bytes(ScBytes(invalid_utf8_overlong.try_into().unwrap()))
             .unwrap()
             .to_val(),
     )
@@ -378,7 +381,7 @@ where
     invalid_utf8_truncated[0] = 0xE0;
     assert!(strkey_to_address(
         host,
-        host.add_host_object(ScBytes(invalid_utf8_truncated.try_into().unwrap()))
+        host.add_obj_bytes(ScBytes(invalid_utf8_truncated.try_into().unwrap()))
             .unwrap()
             .to_val(),
     )
@@ -447,12 +450,12 @@ fn test_muxed_address_strkey_conversions() {
     ];
     let muxed_id: u64 = 0;
     let muxed_address_obj = host
-        .add_host_object(MuxedScAddress(ScAddress::MuxedAccount(
+        .add_obj_muxed_address(ScAddress::MuxedAccount(
             MuxedEd25519Account {
                 id: muxed_id,
                 ed25519: Uint256(account_pk),
             },
-        )))
+        ))
         .unwrap();
 
     let strkey = host
@@ -473,12 +476,12 @@ fn test_muxed_address_strkey_conversions() {
     // Test with a non-zero mux id
     let muxed_id_2: u64 = 12345678901234567890;
     let muxed_address_obj_2 = host
-        .add_host_object(MuxedScAddress(ScAddress::MuxedAccount(
+        .add_obj_muxed_address(ScAddress::MuxedAccount(
             MuxedEd25519Account {
                 id: muxed_id_2,
                 ed25519: Uint256(account_pk),
             },
-        )))
+        ))
         .unwrap();
 
     let strkey_2 = host

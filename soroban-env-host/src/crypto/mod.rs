@@ -6,7 +6,7 @@ use crate::{
     },
     err,
     host::{metered_clone::MeteredContainer, prng::SEED_BYTES},
-    xdr::{ContractCostType, Hash, ScBytes, ScErrorCode, ScErrorType},
+    xdr::{ContractCostType, Hash, ScBytes, ScErrorCode, ScErrorType, ScVal},
     BytesObject, Error, Host, HostError, U32Val, Val, VecObject,
 };
 use elliptic_curve::scalar::IsHigh;
@@ -70,9 +70,11 @@ impl Host {
         &self,
         k: BytesObject,
     ) -> Result<ed25519_dalek::VerifyingKey, HostError> {
-        self.visit_obj(k, |bytes: &ScBytes| {
-            self.ed25519_pub_key_from_bytes(bytes.as_slice())
-        })
+        let scval = self.deserialize_obj(k)?;
+        match scval {
+            ScVal::Bytes(bytes) => self.ed25519_pub_key_from_bytes(bytes.as_slice()),
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     pub(crate) fn verify_sig_ed25519_internal(
@@ -159,9 +161,11 @@ impl Host {
         &self,
         k: BytesObject,
     ) -> Result<p256::ecdsa::VerifyingKey, HostError> {
-        self.visit_obj(k, |bytes: &ScBytes| {
-            self.secp256r1_decode_sec1_uncompressed_pubkey(bytes.as_slice())
-        })
+        let scval = self.deserialize_obj(k)?;
+        match scval {
+            ScVal::Bytes(bytes) => self.secp256r1_decode_sec1_uncompressed_pubkey(bytes.as_slice()),
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     // ECDSA functions
@@ -202,9 +206,11 @@ impl Host {
         C: PrimeCurve + CurveArithmetic,
         SignatureSize<C>: ArrayLength<u8>,
     {
-        self.visit_obj(k, |bytes: &ScBytes| {
-            self.ecdsa_signature_from_bytes(bytes.as_slice())
-        })
+        let scval = self.deserialize_obj(k)?;
+        match scval {
+            ScVal::Bytes(bytes) => self.ecdsa_signature_from_bytes(bytes.as_slice()),
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     // ECDSA secp256k1 functions
@@ -266,18 +272,22 @@ impl Host {
         &self,
         x: BytesObject,
     ) -> Result<Vec<u8>, HostError> {
-        self.visit_obj(x, |bytes: &ScBytes| {
-            let hash = sha256_hash_from_bytes(bytes.as_slice(), self)?;
-            if hash.len() != 32 {
-                return Err(err!(
-                    self,
-                    (ScErrorType::Object, ScErrorCode::UnexpectedSize),
-                    "expected 32-byte BytesObject for sha256 hash, got different size",
-                    hash.len()
-                ));
+        let scval = self.deserialize_obj(x)?;
+        match scval {
+            ScVal::Bytes(bytes) => {
+                let hash = sha256_hash_from_bytes(bytes.as_slice(), self)?;
+                if hash.len() != 32 {
+                    return Err(err!(
+                        self,
+                        (ScErrorType::Object, ScErrorCode::UnexpectedSize),
+                        "expected 32-byte BytesObject for sha256 hash, got different size",
+                        hash.len()
+                    ));
+                }
+                Ok(hash)
             }
-            Ok(hash)
-        })
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     // Keccak256/SHA3 functions
@@ -303,18 +313,22 @@ impl Host {
         &self,
         x: BytesObject,
     ) -> Result<Vec<u8>, HostError> {
-        self.visit_obj(x, |bytes: &ScBytes| {
-            let hash = self.keccak256_hash_from_bytes(bytes.as_slice())?;
-            if hash.len() != 32 {
-                return Err(err!(
-                    self,
-                    (ScErrorType::Object, ScErrorCode::UnexpectedSize),
-                    "expected 32-byte BytesObject for keccak256 hash, got different size",
-                    hash.len()
-                ));
+        let scval = self.deserialize_obj(x)?;
+        match scval {
+            ScVal::Bytes(bytes) => {
+                let hash = self.keccak256_hash_from_bytes(bytes.as_slice())?;
+                if hash.len() != 32 {
+                    return Err(err!(
+                        self,
+                        (ScErrorType::Object, ScErrorCode::UnexpectedSize),
+                        "expected 32-byte BytesObject for keccak256 hash, got different size",
+                        hash.len()
+                    ));
+                }
+                Ok(hash)
             }
-            Ok(hash)
-        })
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     /// Generic implementation of Poseidon permutation for any field type

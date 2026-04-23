@@ -1,9 +1,8 @@
 use crate::{
     budget::AsBudget,
     host::Frame,
-    host_object::MemHostObjectType,
-    xdr::{ContractCostType, ScErrorCode, ScErrorType, ScSymbol},
-    Compare, Host, HostError, Symbol, SymbolObject, SymbolSmall, SymbolStr, U32Val, Vm, VmCaller,
+    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType, ScSymbol, ScVal, ScString, LazyScVal},
+    Compare, Host, HostError, Object, Symbol, SymbolObject, SymbolSmall, SymbolStr, U32Val, Vm, VmCaller,
 };
 
 use super::ErrorHandler;
@@ -285,70 +284,95 @@ impl Host {
         Ok(())
     }
 
-    // Helper called by memobj_copy_to_slice and memobj_copy_to_linear_memory
-    fn memobj_visit_and_copy_bytes_out<HOT: MemHostObjectType>(
+    // Extract owned byte vec from a bytes-like lazy object (ScBytes, ScString, ScSymbol).
+    fn lazy_obj_to_bytes(
         &self,
-        obj: HOT::Wrapper,
+        lazy: &LazyScVal,
+    ) -> Result<Vec<u8>, HostError> {
+        let scval = ScVal::try_from(lazy).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        match scval {
+            ScVal::Bytes(b) => Ok(b.to_vec()),
+            ScVal::String(s) => Ok(s.to_vec()),
+            ScVal::Symbol(s) => Ok(s.to_vec()),
+            _ => Err(self.err(
+                ScErrorType::Object,
+                ScErrorCode::UnexpectedType,
+                "expected bytes-like object",
+                &[],
+            )),
+        }
+    }
+
+    // Helper called by memobj_copy_to_slice and memobj_copy_to_linear_memory
+    fn memobj_visit_and_copy_bytes_out(
+        &self,
+        obj: impl Into<crate::Object>,
         obj_pos: U32Val,
         len: u32,
         copy_bytes_out: impl FnOnce(&[u8]) -> Result<(), HostError>,
     ) -> Result<(), HostError> {
         let obj_pos: u32 = obj_pos.into();
-        self.visit_obj(obj, move |hob: &HOT| {
-            let obj_end = obj_pos
-                .checked_add(len)
-                .ok_or_else(|| self.err_arith_overflow())?;
-            let obj_range = obj_pos as usize..obj_end as usize;
-            let obj_buf = hob.as_byte_slice().get(obj_range).ok_or_else(|| {
-                self.err(
-                    ScErrorType::Object,
-                    ScErrorCode::IndexBounds,
-                    "out-of-bounds read from memory-like host object",
-                    &[],
-                )
-            })?;
-            copy_bytes_out(obj_buf)
-        })
+        let obj: Object = obj.into();
+        let lazy = self.get_lazy_obj(obj)?;
+        let all_bytes = self.lazy_obj_to_bytes(&lazy)?;
+        let obj_end = obj_pos
+            .checked_add(len)
+            .ok_or_else(|| self.err_arith_overflow())?;
+        let obj_range = obj_pos as usize..obj_end as usize;
+        let obj_buf = all_bytes.get(obj_range).ok_or_else(|| {
+            self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "out-of-bounds read from memory-like host object",
+                &[],
+            )
+        })?;
+        copy_bytes_out(obj_buf)
     }
 
-    pub(crate) fn memobj_copy_to_slice<HOT: MemHostObjectType>(
+    pub(crate) fn memobj_copy_to_slice(
         &self,
-        obj: HOT::Wrapper,
+        obj: impl Into<crate::Object>,
         obj_pos: U32Val,
         slice: &mut [u8],
     ) -> Result<(), HostError> {
         let len = self.usize_to_u32(slice.len())?;
-        self.memobj_visit_and_copy_bytes_out::<HOT>(obj, obj_pos, len, |obj_buf| {
+        self.memobj_visit_and_copy_bytes_out(obj, obj_pos, len, |obj_buf| {
             self.metered_copy_byte_slice(slice, obj_buf)
         })
     }
 
-    pub(crate) fn memobj_copy_to_linear_memory<HOT: MemHostObjectType>(
+    pub(crate) fn memobj_copy_to_linear_memory(
         &self,
         vmcaller: &mut VmCaller<Host>,
-        obj: HOT::Wrapper,
+        obj: impl Into<crate::Object>,
         obj_pos: U32Val,
         lm_pos: U32Val,
         len: U32Val,
     ) -> Result<(), HostError> {
         let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(lm_pos, len)?;
-        self.memobj_visit_and_copy_bytes_out::<HOT>(obj, obj_pos, len, |obj_buf| {
+        self.memobj_visit_and_copy_bytes_out(obj, obj_pos, len, |obj_buf| {
             self.metered_vm_write_bytes_to_linear_memory(vmcaller, &vm, pos, obj_buf)
         })
     }
 
-    // Helper called by memobj_copy_from_slice and memobj_copy_from_linear_memory
-    fn memobj_clone_resize_and_copy_bytes_in<HOT: MemHostObjectType>(
+    // Helper: clone bytes from lazy object, resize/mutate, create new object of same kind
+    fn memobj_clone_resize_and_copy_bytes_in(
         &self,
-        obj: HOT::Wrapper,
+        obj: impl Into<crate::Object>,
         obj_pos: U32Val,
         len: u32,
         copy_bytes_in: impl FnOnce(&mut [u8]) -> Result<(), HostError>,
-    ) -> Result<HOT::Wrapper, HostError> {
+    ) -> Result<crate::Object, HostError> {
+        let obj: crate::Object = obj.into();
         let obj_pos: u32 = obj_pos.into();
-        let mut obj_new: Vec<u8> = self
-            .visit_obj(obj, move |hv: &HOT| hv.metered_clone(self))?
-            .into();
+        let lazy = self.get_lazy_obj(obj)?;
+        let tag = obj.as_val().get_tag();
+        let all_bytes = self.lazy_obj_to_bytes(&lazy)?;
+        self.charge_budget(ContractCostType::MemAlloc, Some(all_bytes.len() as u64))?;
+        let mut obj_new: Vec<u8> = all_bytes;
         let obj_end = obj_pos
             .checked_add(len)
             .ok_or_else(|| self.err_arith_overflow())? as usize;
@@ -369,46 +393,67 @@ impl Host {
             )
         })?;
         copy_bytes_in(obj_buf)?;
-        self.add_host_object(HOT::try_from_bytes(self, obj_new)?)
+        // Reconstruct same-typed ScVal
+        use crate::Tag;
+        let scval = match tag {
+            Tag::BytesObject => ScVal::Bytes(ScBytes::try_from(obj_new).map_err(|_| {
+                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+            })?),
+            Tag::StringObject => ScVal::String(ScString::try_from(obj_new).map_err(|_| {
+                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+            })?),
+            Tag::SymbolObject => ScVal::Symbol(ScSymbol::try_from(obj_new).map_err(|_| {
+                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+            })?),
+            _ => return Err(self.err(
+                ScErrorType::Object,
+                ScErrorCode::UnexpectedType,
+                "expected bytes-like object for copy_from",
+                &[],
+            )),
+        };
+        Ok(self.add_obj_from_scval(scval)?.into())
     }
 
-    pub(crate) fn memobj_copy_from_slice<HOT: MemHostObjectType>(
+    pub(crate) fn memobj_copy_from_slice(
         &self,
-        obj: HOT::Wrapper,
+        obj: impl Into<crate::Object>,
         obj_pos: U32Val,
         slice: &[u8],
-    ) -> Result<HOT::Wrapper, HostError> {
+    ) -> Result<crate::Object, HostError> {
         let len = self.usize_to_u32(slice.len())?;
-        self.memobj_clone_resize_and_copy_bytes_in::<HOT>(obj, obj_pos, len, |obj_buf| {
+        self.memobj_clone_resize_and_copy_bytes_in(obj, obj_pos, len, |obj_buf| {
             self.metered_copy_byte_slice(obj_buf, slice)
         })
     }
 
-    pub(crate) fn memobj_copy_from_linear_memory<HOT: MemHostObjectType>(
+    pub(crate) fn memobj_copy_from_linear_memory(
         &self,
         vmcaller: &mut VmCaller<Host>,
-        obj: HOT::Wrapper,
+        obj: impl Into<crate::Object>,
         obj_pos: U32Val,
         lm_pos: U32Val,
         len: U32Val,
-    ) -> Result<HOT::Wrapper, HostError> {
+    ) -> Result<crate::Object, HostError> {
         let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(lm_pos, len)?;
-        self.memobj_clone_resize_and_copy_bytes_in::<HOT>(obj, obj_pos, len, |obj_buf| {
+        self.memobj_clone_resize_and_copy_bytes_in(obj, obj_pos, len, |obj_buf| {
             self.metered_vm_read_bytes_from_linear_memory(vmcaller, &vm, pos, obj_buf)
         })
     }
 
-    pub(crate) fn memobj_new_from_linear_memory<HOT: MemHostObjectType>(
+    pub(crate) fn memobj_new_from_linear_memory(
         &self,
         vmcaller: &mut VmCaller<Host>,
         lm_pos: U32Val,
         len: U32Val,
-    ) -> Result<HOT::Wrapper, HostError> {
+        make_scval: impl FnOnce(Vec<u8>) -> Result<ScVal, HostError>,
+    ) -> Result<crate::Object, HostError> {
         let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(lm_pos, len)?;
         self.charge_budget(ContractCostType::MemAlloc, Some(len as u64))?;
         let mut vnew: Vec<u8> = vec![0; len as usize];
         self.metered_vm_read_bytes_from_linear_memory(vmcaller, &vm, pos, &mut vnew)?;
-        self.add_host_object::<HOT>(HOT::try_from_bytes(self, vnew)?)
+        let scval = make_scval(vnew)?;
+        Ok(self.add_obj_from_scval(scval)?.into())
     }
 
     pub(crate) fn symbol_matches(&self, s: &[u8], sym: Symbol) -> Result<bool, HostError> {
@@ -420,11 +465,13 @@ impl Host {
                 .map(|c| c == Ordering::Equal)
         } else {
             let sobj: SymbolObject = sym.try_into()?;
-            self.visit_obj(sobj, |scsym: &ScSymbol| {
-                self.as_budget()
-                    .compare(&scsym.as_slice(), &s)
-                    .map(|c| c == Ordering::Equal)
-            })
+            let lazy = self.get_lazy_obj(Object::try_from(sobj.to_val()).unwrap())?;
+            let sym_bytes = lazy.as_symbol().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
+            self.as_budget()
+                .compare(&sym_bytes.as_bytes(), &s)
+                .map(|c| c == Ordering::Equal)
         }
     }
 

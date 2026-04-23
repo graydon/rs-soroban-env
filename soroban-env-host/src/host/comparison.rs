@@ -2,96 +2,59 @@ use core::cmp::{min, Ordering};
 
 use crate::{
     budget::{AsBudget, Budget, DepthLimiter},
-    host_object::{HostObject, MuxedScAddress},
+    host_object::MuxedScAddress,
     storage::Storage,
     xdr::{
         AccountId, ContractCostType, ContractDataDurability, ContractExecutable,
         ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, Duration, Hash, Int128Parts,
-        Int256Parts, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData,
-        LedgerKeyTrustLine, PublicKey, ScAddress, ScContractInstance, ScError, ScErrorCode,
-        ScErrorType, ScMap, ScMapEntry, ScNonceKey, ScVal, ScVec, TimePoint, TrustLineAsset,
-        UInt128Parts, UInt256Parts, Uint256,
+        Int256Parts, LazyScVal, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
+        LedgerKeyContractData, LedgerKeyTrustLine, PublicKey, ScAddress, ScContractInstance,
+        ScError, ScErrorCode, ScErrorType, ScMap, ScMapEntry, ScNonceKey, ScVal, ScVec, TimePoint,
+        TrustLineAsset, UInt128Parts, UInt256Parts, Uint256,
     },
     Compare, Host, HostError, SymbolStr, I256, U256,
 };
 
 use super::declared_size::DeclaredSizeForMetering;
 
-// We can't use core::mem::discriminant here because it returns an opaque type
-// that only supports Eq, not Ord, to reduce the possibility of an API breakage
-// based on reordering enums: https://github.com/rust-lang/rust/issues/51561
-//
-// Note that these must have the same order as the impl
-// of Ord for ScVal, re https://github.com/stellar/rs-soroban-env/issues/743
-fn host_obj_discriminant(ho: &HostObject) -> usize {
-    match ho {
-        HostObject::U64(_) => 0,
-        HostObject::I64(_) => 1,
-        HostObject::TimePoint(_) => 2,
-        HostObject::Duration(_) => 3,
-        HostObject::U128(_) => 4,
-        HostObject::I128(_) => 5,
-        HostObject::U256(_) => 6,
-        HostObject::I256(_) => 7,
-        HostObject::Bytes(_) => 8,
-        HostObject::String(_) => 9,
-        HostObject::Symbol(_) => 10,
-        HostObject::Vec(_) => 11,
-        HostObject::Map(_) => 12,
-        HostObject::Address(_) => 13,
-        HostObject::MuxedAddress(_) => 14,
+// ScValType discriminant ordering for object comparison.
+// Must match the order of `Ord for ScVal`.
+fn lazy_obj_discriminant(lazy: &LazyScVal) -> usize {
+    use crate::xdr::ScValType;
+    match lazy.discriminant() {
+        ScValType::U64 => 0,
+        ScValType::I64 => 1,
+        ScValType::Timepoint => 2,
+        ScValType::Duration => 3,
+        ScValType::U128 => 4,
+        ScValType::I128 => 5,
+        ScValType::U256 => 6,
+        ScValType::I256 => 7,
+        ScValType::Bytes => 8,
+        ScValType::String => 9,
+        ScValType::Symbol => 10,
+        ScValType::Vec => 11,
+        ScValType::Map => 12,
+        ScValType::Address => 13,
+        // MuxedAddress shares Address discriminant in ScVal
+        _ => 14,
     }
 }
 
-impl Compare<HostObject> for Host {
+impl Compare<LazyScVal> for Host {
     type Error = HostError;
 
-    fn compare(&self, a: &HostObject, b: &HostObject) -> Result<Ordering, Self::Error> {
-        use HostObject::*;
-        let _span = tracy_span!("Compare<HostObject>");
-        // This is the depth limit checkpoint for `Val` comparison.
-        self.budget_cloned().with_limited_depth(|_| {
-            match (a, b) {
-                (U64(a), U64(b)) => self.as_budget().compare(a, b),
-                (I64(a), I64(b)) => self.as_budget().compare(a, b),
-                (TimePoint(a), TimePoint(b)) => self.as_budget().compare(a, b),
-                (Duration(a), Duration(b)) => self.as_budget().compare(a, b),
-                (U128(a), U128(b)) => self.as_budget().compare(a, b),
-                (I128(a), I128(b)) => self.as_budget().compare(a, b),
-                (U256(a), U256(b)) => self.as_budget().compare(a, b),
-                (I256(a), I256(b)) => self.as_budget().compare(a, b),
-                (Vec(a), Vec(b)) => self.compare(a, b),
-                (Map(a), Map(b)) => self.compare(a, b),
-                (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (Address(a), Address(b)) => self.as_budget().compare(a, b),
-                (MuxedAddress(a), MuxedAddress(b)) => self.as_budget().compare(a, b),
-
-                // List out at least one side of all the remaining cases here so
-                // we don't accidentally forget to update this when/if a new
-                // HostObject type is added.
-                (U64(_), _)
-                | (TimePoint(_), _)
-                | (Duration(_), _)
-                | (I64(_), _)
-                | (U128(_), _)
-                | (I128(_), _)
-                | (U256(_), _)
-                | (I256(_), _)
-                | (Vec(_), _)
-                | (Map(_), _)
-                | (Bytes(_), _)
-                | (String(_), _)
-                | (Symbol(_), _)
-                | (Address(_), _)
-                | (MuxedAddress(_), _) => {
-                    let a = host_obj_discriminant(a);
-                    let b = host_obj_discriminant(b);
-                    Ok(a.cmp(&b))
-                }
-            }
-        })
+    fn compare(&self, a: &LazyScVal, b: &LazyScVal) -> Result<Ordering, Self::Error> {
+        let _span = tracy_span!("Compare<LazyScVal>");
+        // Materialize both to ScVal and delegate to existing ScVal comparison.
+        // This is the simplest correct approach; we can optimize hot paths later.
+        let a_scval = ScVal::try_from(a).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        let b_scval = ScVal::try_from(b).map_err(|_| {
+            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+        })?;
+        self.as_budget().compare(&a_scval, &b_scval)
     }
 }
 
@@ -567,17 +530,10 @@ mod tests {
 
     #[test]
     fn host_obj_discriminant_order() {
-        // The HostObject discriminants need to be ordered the same
-        // as the ScVal discriminants so that Compare<HostObject>
-        // produces the same results as `Ord for ScVal`,
-        // re https://github.com/stellar/rs-soroban-env/issues/743.
-        //
-        // This test creates pairs of corresponding ScVal/HostObjects,
-        // puts them all into a list, and sorts them 2 ways:
-        // comparing ScVals, and comparing the HostObject discriminants;
-        // then tests that the two lists are the same.
+        // The lazy object discriminants need to be ordered the same
+        // as the ScVal discriminants so that Compare<LazyScVal>
+        // produces the same results as `Ord for ScVal`.
 
-        use crate::ScValObjRef;
         use soroban_env_common::xdr;
 
         let host = Host::default();
@@ -617,34 +573,23 @@ mod tests {
             )))),
         ];
 
-        let pairs: Vec<_> = xdr_vals
-            .into_iter()
-            .map(|xdr_val| {
-                let xdr_obj = ScValObjRef::classify(&xdr_val).unwrap();
-                let host_obj = host.to_host_obj(&xdr_obj).unwrap();
-                (xdr_obj, host_obj)
-            })
+        // Convert to lazy, get discriminants, verify same ordering as ScVal
+        let lazy_vals: Vec<_> = xdr_vals
+            .iter()
+            .map(|sv| crate::xdr::LazyScVal::try_from(sv).unwrap())
             .collect();
 
+        let mut pairs: Vec<_> = xdr_vals.iter().zip(lazy_vals.iter()).collect();
+
         let mut pairs_xdr_sorted = pairs.clone();
-        let mut pairs_host_sorted = pairs_xdr_sorted.clone();
+        let mut pairs_lazy_sorted = pairs.clone();
 
-        pairs_xdr_sorted.sort_by(|&(v1, _), &(v2, _)| v1.cmp(&v2));
-
-        pairs_host_sorted.sort_by(|&(_, v1), &(_, v2)| {
-            host.visit_obj_untyped(v1, |v1| {
-                host.visit_obj_untyped(v2, |v2| {
-                    let v1d = host_obj_discriminant(v1);
-                    let v2d = host_obj_discriminant(v2);
-                    Ok(v1d.cmp(&v2d))
-                })
-            })
-            .unwrap()
+        pairs_xdr_sorted.sort_by(|(v1, _), (v2, _)| v1.cmp(v2));
+        pairs_lazy_sorted.sort_by(|(_, l1), (_, l2)| {
+            lazy_obj_discriminant(l1).cmp(&lazy_obj_discriminant(l2))
         });
 
-        let iter = pairs_xdr_sorted.into_iter().zip(pairs_host_sorted);
-
-        for ((xdr1, _), (xdr2, _)) in iter {
+        for ((xdr1, _), (xdr2, _)) in pairs_xdr_sorted.iter().zip(pairs_lazy_sorted.iter()) {
             assert_eq!(xdr1, xdr2);
         }
     }

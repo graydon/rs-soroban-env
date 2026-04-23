@@ -2,10 +2,10 @@ use soroban_synth_wasm::{Arity, LocalRef, ModEmitter, Operand};
 
 use crate::{
     budget::AsBudget,
-    host_object::{HostMap, HostVec, MuxedScAddress},
+    host_object::MuxedScAddress,
     xdr::{
         ContractId, Duration, Hash, MuxedEd25519Account, ScAddress, ScBytes, ScErrorCode,
-        ScErrorType, ScString, ScSymbol, TimePoint, Uint256,
+        ScErrorType, ScString, ScSymbol, ScVec, ScMap, ScMapEntry, ScVal, TimePoint, Uint256,
     },
     AddressObject, Bool, BytesObject, ContractTtlExtension, DurationObject, DurationSmall,
     DurationVal, Env, Error, Host, HostError, I128Object, I128Small, I128Val, I256Object,
@@ -248,87 +248,84 @@ impl TestVal for ContractTtlExtension {
 
 impl TestObject for U64Object {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(u64::MAX).unwrap()
+        host.add_obj_u64(u64::MAX).unwrap()
     }
 }
 impl TestObject for I64Object {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(i64::MAX).unwrap()
+        host.add_obj_i64(i64::MAX).unwrap()
     }
 }
 impl TestObject for TimepointObject {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(TimePoint(u64::MAX)).unwrap()
+        host.add_obj_timepoint(TimePoint(u64::MAX)).unwrap()
     }
 }
 impl TestObject for DurationObject {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(Duration(u64::MAX)).unwrap()
+        host.add_obj_duration(Duration(u64::MAX)).unwrap()
     }
 }
 impl TestObject for U128Object {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(u128::MAX).unwrap()
+        host.add_obj_u128(u128::MAX).unwrap()
     }
 }
 impl TestObject for I128Object {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(i128::MAX).unwrap()
+        host.add_obj_i128(i128::MAX).unwrap()
     }
 }
 impl TestObject for U256Object {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(U256::MAX).unwrap()
+        host.add_obj_u256(U256::MAX).unwrap()
     }
 }
 impl TestObject for I256Object {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(I256::MAX).unwrap()
+        host.add_obj_i256(I256::MAX).unwrap()
     }
 }
 impl TestObject for BytesObject {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(ScBytes([0; 32].try_into().unwrap()))
+        host.add_obj_bytes(ScBytes([0; 32].try_into().unwrap()))
             .unwrap()
     }
 }
 
 impl TestObjectWithInitialLength for BytesObject {
     fn test_object_with_initial_length(host: &Host, len: u32) -> Self {
-        host.add_host_object(ScBytes(vec![0; len as usize].try_into().unwrap()))
+        host.add_obj_bytes(ScBytes(vec![0; len as usize].try_into().unwrap()))
             .unwrap()
     }
 }
 
 impl TestObject for StringObject {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(ScString::default()).unwrap()
+        host.add_obj_string(ScString::default()).unwrap()
     }
 }
 impl TestObject for SymbolObject {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(ScSymbol::default()).unwrap()
+        host.add_obj_symbol(ScSymbol::default()).unwrap()
     }
 }
 impl TestObject for VecObject {
     fn test_object(host: &Host) -> Self {
-        let v = HostVec::from_vec(vec![Val::from_void().to_val(); 1]).unwrap();
-        host.add_host_object(v).unwrap()
+        let scval = host.from_host_val(Val::from_void().to_val()).unwrap();
+        host.add_obj_vec_scval(ScVec(vec![scval].try_into().unwrap())).unwrap()
     }
 }
 impl TestObject for MapObject {
     fn test_object(host: &Host) -> Self {
-        let m = HostMap::from_map(
-            vec![(Val::from_void().to_val(), Val::from_void().to_val())],
-            host,
-        )
-        .unwrap();
-        host.add_host_object(m).unwrap()
+        let k = host.from_host_val(Val::from_void().to_val()).unwrap();
+        let v = host.from_host_val(Val::from_void().to_val()).unwrap();
+        host.add_obj_map_scval(ScMap(vec![ScMapEntry { key: k, val: v }].try_into().unwrap())).unwrap()
     }
 }
 impl TestObject for AddressObject {
     fn test_object(host: &Host) -> Self {
-        host.add_host_object(ScAddress::Contract(ContractId(Hash([0; 32]))))
+        host.add_obj_address(ScAddress::Contract(ContractId(Hash([0; 32]))))
             .unwrap()
     }
 }
@@ -339,7 +336,7 @@ impl TestObject for MuxedAddressObject {
             id: 0,
             ed25519: Uint256([0; 32]),
         });
-        host.add_host_object(MuxedScAddress(addr)).unwrap()
+        host.add_obj_muxed_address(addr).unwrap()
     }
 }
 

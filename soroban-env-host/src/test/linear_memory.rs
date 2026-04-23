@@ -1,6 +1,4 @@
 use crate::{
-    host_object::HostMap,
-    host_object::HostVec,
     xdr::{ScBytes, ScErrorCode, ScErrorType, ScString, ScSymbol},
     Env, Host, HostError, Symbol, SymbolSmall, U32Val, Val,
 };

@@ -9,7 +9,7 @@ use crate::{
     xdr::{
         Asset, ContractCodeEntry, ContractDataDurability, ContractExecutable, ContractId,
         ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2, ExtensionPoint,
-        Hash, ScAddress, ScErrorCode, ScErrorType,
+        Hash, ScAddress, ScErrorCode, ScErrorType, ScVal,
     },
     AddressObject, BytesObject, Host, HostError, Symbol, TryFromVal, TryIntoVal, Val,
 };
@@ -35,7 +35,7 @@ impl Host {
                 ScErrorCode::ExistingValue,
                 "contract already exists",
                 &[self
-                    .add_host_object(self.scbytes_from_hash(&contract_id.0)?)?
+                    .add_obj_bytes(self.scbytes_from_hash(&contract_id.0)?)?
                     .into()],
             ));
         }
@@ -128,7 +128,7 @@ impl Host {
                 contract_id,
                 Symbol::try_from_val(self, &"init_asset")?,
                 &[self
-                    .add_host_object(self.scbytes_from_vec(asset_bytes)?)?
+                    .add_obj_bytes(self.scbytes_from_vec(asset_bytes)?)?
                     .into()],
                 CallParams::default_external_call(),
             )?;
@@ -208,7 +208,7 @@ impl Host {
         if matches!(args.executable, ContractExecutable::Wasm(_)) {
             self.call_constructor(&contract_id, constructor_args)?;
         }
-        self.add_host_object(ScAddress::Contract(contract_id))
+        self.add_obj_address(ScAddress::Contract(contract_id))
     }
 
     pub(crate) fn get_contract_id_hash(
@@ -217,7 +217,13 @@ impl Host {
         salt: BytesObject,
     ) -> Result<ContractId, HostError> {
         let contract_id_preimage = ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-            address: self.visit_obj(deployer, |addr: &ScAddress| addr.metered_clone(self))?,
+            address: {
+                let scval = self.deserialize_obj(deployer)?;
+                match scval {
+                    ScVal::Address(addr) => addr.metered_clone(self)?,
+                    _ => return Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+                }
+            },
             salt: self.u256_from_bytesobj_input("contract_id_salt", salt)?,
         });
 
@@ -287,7 +293,7 @@ impl Host {
             });
         }
 
-        let hash_obj = self.add_host_object(self.scbytes_from_slice(hash_bytes.as_slice())?)?;
+        let hash_obj = self.add_obj_bytes(self.scbytes_from_slice(hash_bytes.as_slice())?)?;
         let code_key = self.contract_code_ledger_key(&Hash(hash_bytes.metered_clone(self)?))?;
 
         let mut storage = self.try_borrow_storage_mut()?;
@@ -299,13 +305,17 @@ impl Host {
         // We may also, in the cache-supporting protocol, overwrite the contract if its ext field changed.
         if !should_put_contract {
             let lazy_entry = storage.get(&code_key, self, None)?;
-            let entry = crate::storage::from_lazy_entry(&lazy_entry)?;
-            if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
-                ext: old_ext,
-                ..
-            }) = &entry.data
-            {
-                should_put_contract = *old_ext != ext;
+            // Use lazy accessors to check the ext field without
+            // deserializing the entire LedgerEntry (including WASM bytes).
+            let data = lazy_entry.data();
+            if let Some(lazy_code) = data.as_contract_code() {
+                let lazy_ext = lazy_code.ext();
+                // Deserialize just the ext sub-region to compare
+                let old_ext = crate::xdr::ContractCodeEntryExt::try_from(&lazy_ext)
+                    .map_err(|_| {
+                        HostError::from((crate::xdr::ScErrorType::Storage, crate::xdr::ScErrorCode::InternalError))
+                    })?;
+                should_put_contract = old_ext != ext;
             }
         }
 

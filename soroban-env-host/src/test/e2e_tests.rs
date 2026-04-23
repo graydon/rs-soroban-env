@@ -3269,7 +3269,7 @@ fn test_create_contract_authorized_by_custom_account() {
     let dummy_host = Host::test_host();
     let signers = vec![TestSigner::AccountContract(AccountContractSigner {
         address: dummy_host
-            .add_host_object(account_contract.contract_address.clone())
+            .add_obj_address(account_contract.contract_address.clone())
             .unwrap()
             .try_into_val(&dummy_host)
             .unwrap(),

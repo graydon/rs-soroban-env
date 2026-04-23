@@ -2,8 +2,7 @@ use crate::{
     budget::AsBudget,
     crypto::metered_scalar::MeteredScalar,
     crypto::PointValidationMode,
-    host_object::HostVec,
-    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType},
+    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType, ScVal},
     Bool, BytesObject, Env, Host, HostError, TryFromVal, U256Val, Val, VecObject,
 };
 use ark_bls12_381::{
@@ -187,32 +186,16 @@ impl Host {
         ct_subgroup: ContractCostType,
         tag: &str,
     ) -> Result<Affine<P>, HostError> {
-        let pt: Affine<P> = self.visit_obj(bo, |bytes: &ScBytes| {
-            self.validate_point_encoding::<EXPECTED_SIZE>(&bytes, tag)?;
-            // `CanonicalDeserialize` of `Affine<P>` calls into
-            // `P::deserialize_with_mode`, where `P` is `arc_bls12_381::{g1,g2}::Config`, the
-            // core logic is in `arc_bls12_381::curves::util::read_{g1,g2}_uncompressed`.
-            //
-            // The `arc_bls12_381` lib already expects the input to be serialized in
-            // big-endian order (aligning with the common standard and contrary
-            // to ark::serialize's convention),
-            //
-            // i.e. `input = be_bytes(X) || be_bytes(Y)` and the
-            // most-significant three bits of X are flags:
-            //
-            // `bits(Affine) = [compression_flag, infinity_flag, sort_flag, ..remaining X_bits.., ..Y_bits..]`
-            //
-            // For `G1Affine`, each coordinate is an `Fp` that is 48 bytes.
-            //
-            // For `G2Affine`, each coordinate is an `Fp2` which contains two `Fp`,
-            // i.e. `(c1: Fp, c0: Fp)` see `field_element_deserialize` for more details.
-            //
-            // Internally when deserializing `Fp`, the flag bits are masked off
-            // to get `X: Fp`. The Y however, does not have the top bits masked off
-            // so it is possible for Y to exceed 381 bits. Internally `Fp` deserialization
-            // makes sure any value >= prime modulus results in an error.
-            self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(bytes.as_slice(), tag)
-        })?;
+        let pt: Affine<P> = {
+            let scval = self.deserialize_obj(bo)?;
+            match scval {
+                ScVal::Bytes(bytes) => {
+                    self.validate_point_encoding::<EXPECTED_SIZE>(&bytes, tag)?;
+                    self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(bytes.as_slice(), tag)
+                }
+                _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+            }
+        }?;
 
         let check_on_curve = matches!(
             validation_mode,
@@ -293,7 +276,7 @@ impl Host {
         // This aligns with our chosen standard
         // (https://github.com/zcash/librustzcash/blob/6e0364cd42a2b3d2b958a54771ef51a8db79dd29/pairing/src/bls12_381/README.md#serialization)
         self.serialize_uncompressed_into_slice::<G1_SERIALIZED_SIZE, _>(g1, &mut buf, "G1")?;
-        self.add_host_object(self.scbytes_from_slice(&buf)?)
+        self.add_obj_bytes(self.scbytes_from_slice(&buf)?)
     }
 
     pub(crate) fn g1_projective_serialize_uncompressed(
@@ -328,7 +311,7 @@ impl Host {
         //
         // This aligns with the standard we've picked https://github.com/zcash/librustzcash/blob/6e0364cd42a2b3d2b958a54771ef51a8db79dd29/pairing/src/bls12_381/README.md#serialization
         self.serialize_uncompressed_into_slice::<G2_SERIALIZED_SIZE, _>(g2, &mut buf, "G2")?;
-        self.add_host_object(self.scbytes_from_slice(&buf)?)
+        self.add_obj_bytes(self.scbytes_from_slice(&buf)?)
     }
 
     pub(crate) fn g2_projective_serialize_uncompressed(
@@ -352,49 +335,33 @@ impl Host {
         bo: BytesObject,
         tag: &str,
     ) -> Result<T, HostError> {
-        self.visit_obj(bo, |bytes: &ScBytes| {
-            if bytes.len() != EXPECTED_SIZE {
-                return Err(self.err(
-                    ScErrorType::Crypto,
-                    ScErrorCode::InvalidInput,
-                    format!(
-                        "bls12-381 field element {}: invalid input length to deserialize",
-                        tag
-                    )
-                    .as_str(),
-                    &[
-                        Val::from_u32(bytes.len() as u32).into(),
-                        Val::from_u32(EXPECTED_SIZE as u32).into(),
-                    ],
-                ));
+        let scval = self.deserialize_obj(bo)?;
+        match scval {
+            ScVal::Bytes(bytes) => {
+                if bytes.len() != EXPECTED_SIZE {
+                    return Err(self.err(
+                        ScErrorType::Crypto,
+                        ScErrorCode::InvalidInput,
+                        format!(
+                            "bls12-381 field element {}: invalid input length to deserialize",
+                            tag
+                        )
+                        .as_str(),
+                        &[
+                            Val::from_u32(bytes.len() as u32).into(),
+                            Val::from_u32(EXPECTED_SIZE as u32).into(),
+                        ],
+                    ));
+                }
+                let mut buf = [0u8; EXPECTED_SIZE];
+                self.metered_copy_byte_slice(&mut buf, &bytes)?;
+
+                buf.reverse();
+
+                self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(&buf, tag)
             }
-            let mut buf = [0u8; EXPECTED_SIZE];
-            self.metered_copy_byte_slice(&mut buf, bytes)?;
-
-            buf.reverse();
-
-            // The field element here an either be a Fp<P, N=6> (base field
-            // element) or QuadExtField<P> (quadratic extension)
-            //
-            // - `CanonicalDeserialize for Fp<P, N>` assumes input bytes in
-            // little-endian order, with the highest (right-most) bits being
-            // empty flags. This is reverse of our rule, which assumes
-            // big-endian order with the highest (left-most) bits for flags.
-            //
-            // - `CanonicalDeserialize for QuadExtField<P>` reads the first
-            // chunk, deserialize it into `Fp` as `c0`. Then repeat for `c1`. The
-            // deserialization for `Fp` follows same rules as above, where the
-            // bytes are expected in little-endian, with the highest bits being
-            // empty flags. There is no check involved. This is entirely
-            // reversed from our input format: `be_bytes(c1) || be_bytes(c0)` from
-            // [standard](https://github.com/zcash/librustzcash/blob/6e0364cd42a2b3d2b958a54771ef51a8db79dd29/pairing/src/bls12_381/README.md#serialization)
-            //
-            // In either case, we just need to reverse the input bytes before
-            // passing them in. There is no other check for `Fp` besides the
-            // length check, internally it makes sure `Fp` is valid integer
-            // modulo `q` (the prime modulus)
-            self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(&buf, tag)
-        })
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     pub(crate) fn fp_deserialize_from_bytesobj(&self, bo: BytesObject) -> Result<Fq, HostError> {
@@ -413,13 +380,12 @@ impl Host {
             Some(len as u64 * FR_SERIALIZED_SIZE as u64),
         )?;
         scalars.reserve(len as usize);
-        let _ = self.visit_obj(vs, |vs: &HostVec| {
-            for s in vs.iter() {
-                let ss = self.fr_from_u256val(U256Val::try_from_val(self, s)?)?;
-                scalars.push(ss);
-            }
-            Ok(())
-        })?;
+        let elems = self.scvec_from_obj(vs)?;
+        for scval in elems.iter() {
+            let s = self.to_host_val(scval)?;
+            let ss = self.fr_from_u256val(U256Val::try_from_val(self, &s)?)?;
+            scalars.push(ss);
+        }
         Ok(scalars)
     }
 
@@ -454,19 +420,18 @@ impl Host {
             Some(len as u64 * EXPECTED_SIZE as u64),
         )?;
         let mut points: Vec<Affine<P>> = Vec::with_capacity(len as usize);
-        let _ = self.visit_obj(vp, |vp: &HostVec| {
-            for p in vp.iter() {
-                let pp = self.affine_deserialize::<EXPECTED_SIZE, P>(
-                    BytesObject::try_from_val(self, p)?,
-                    PointValidationMode::CheckOnCurveAndInSubgroup,
-                    ct_curve,
-                    ct_subgroup,
-                    tag,
-                )?;
-                points.push(pp);
-            }
-            Ok(())
-        })?;
+        let elems = self.scvec_from_obj(vp)?;
+        for scval in elems.iter() {
+            let p = self.to_host_val(scval)?;
+            let pp = self.affine_deserialize::<EXPECTED_SIZE, P>(
+                BytesObject::try_from_val(self, &p)?,
+                PointValidationMode::CheckOnCurveAndInSubgroup,
+                ct_curve,
+                ct_subgroup,
+                tag,
+            )?;
+            points.push(pp);
+        }
         Ok(points)
     }
 

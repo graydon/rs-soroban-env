@@ -1,8 +1,7 @@
 use crate::{
     budget::Budget,
-    host_object::HostVec,
     storage::{Footprint, Storage},
-    Host, HostError, LedgerInfo, MeteredOrdMap,
+    xdr::ScVec, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
 use soroban_env_common::{Env, Symbol};
 use soroban_test_wasms::{ADD_I32, COMPLEX};
@@ -109,7 +108,7 @@ fn run_complex() -> Result<(), HostError> {
         host.call(
             contract_id_obj,
             Symbol::try_from_small_str("go")?,
-            host.add_host_object(HostVec::new())?,
+            host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
         )?;
         let (store, _) = host.try_finish().unwrap();
         store.footprint
@@ -130,7 +129,7 @@ fn run_complex() -> Result<(), HostError> {
         host.measured_call(
             contract_id_obj,
             Symbol::try_from_small_str("go")?,
-            host.add_host_object(HostVec::new())?,
+            host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
         )?;
     }
     // Give tracy a little time to extract data.

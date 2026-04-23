@@ -8,7 +8,7 @@ use crate::{
     storage::{is_persistent_key, AccessType, Storage},
     xdr::{
         ContractDataDurability, ContractId, HostFunction, LedgerEntryData, LedgerKey, ScAddress,
-        ScErrorCode, ScErrorType, ScSymbol,
+        ScErrorCode, ScErrorType, ScSymbol, ScVal,
     },
     AddressObject, Symbol, SymbolStr, TryFromVal,
 };
@@ -627,7 +627,10 @@ impl MeteringInvocation {
         let mut address_xdr = ScAddress::Contract(Default::default());
         let mut function_name_xdr = ScSymbol::default();
         host.with_debug_mode(|| {
-            address_xdr = host.visit_obj(address, |a: &ScAddress| Ok(a.clone()))?;
+            let scval = host.deserialize_obj(address)?;
+            if let ScVal::Address(a) = scval {
+                address_xdr = a;
+            }
             function_name_xdr = SymbolStr::try_from_val(host, &function_name)?
                 .to_string()
                 .as_str()
@@ -676,7 +679,10 @@ impl MeteringInvocation {
             .try_into()
             .unwrap_or_default();
         host.with_debug_mode(|| {
-            address_xdr = host.visit_obj(address, |a: &ScAddress| Ok(a.clone()))?;
+            let scval = host.deserialize_obj(address)?;
+            if let ScVal::Address(a) = scval {
+                address_xdr = a;
+            }
             Ok(())
         });
         MeteringInvocation::InvokeContract(address_xdr, function_name)

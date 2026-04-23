@@ -646,20 +646,24 @@ fn get_account_balance(
 
     host.with_mut_storage(|storage| {
         let lazy_le = read_account_entry(host, storage, &lk, &addr)?;
-        let le = storage::from_lazy_entry(&lazy_le)?;
-
-        let ae = match &le.data {
-            LedgerEntryData::Account(ae) => Ok(ae),
-            _ => Err(host.err(
+        // Use lazy accessor to read balance directly from XDR bytes.
+        let data = lazy_le.data();
+        let lazy_ae = data.as_account().ok_or_else(|| {
+            host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
                 "unexpected entry found",
                 &[],
-            )),
-        }?;
+            )
+        })?;
+        let balance = lazy_ae.balance();
 
-        let (min, max) = get_min_max_account_balance(host, ae)?;
-        if ae.balance < min {
+        // For min/max checks we need more fields — deserialize AccountEntry.
+        let ae = AccountEntry::try_from(&lazy_ae).map_err(|_| {
+            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
+        })?;
+        let (min, max) = get_min_max_account_balance(host, &ae)?;
+        if balance < min {
             return Err(host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -667,7 +671,7 @@ fn get_account_balance(
                 &[],
             ));
         }
-        if ae.balance > max {
+        if balance > max {
             return Err(host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -675,7 +679,7 @@ fn get_account_balance(
                 &[],
             ));
         }
-        Ok(ae.balance)
+        Ok(balance)
     })
 }
 
@@ -730,20 +734,24 @@ fn get_trustline_balance(
     let lk = host.to_trustline_key(account_id, asset)?;
     host.with_mut_storage(|storage| {
         let lazy_le = read_trustline_entry(host, storage, &lk)?;
-        let le = storage::from_lazy_entry(&lazy_le)?;
-
-        let tl = match &le.data {
-            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
-            _ => Err(host.err(
+        // Use lazy accessor to read balance directly.
+        let data = lazy_le.data();
+        let lazy_tl = data.as_trustline().ok_or_else(|| {
+            host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
                 "unexpected entry found",
                 &[],
-            )),
-        }?;
+            )
+        })?;
+        let balance = lazy_tl.balance();
 
+        // For min/max checks we need more fields — deserialize TrustLineEntry.
+        let tl = TrustLineEntry::try_from(&lazy_tl).map_err(|_| {
+            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
+        })?;
         let (min, max) = get_min_max_trustline_balance(host, &tl)?;
-        if tl.balance < min {
+        if balance < min {
             return Err(host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -751,7 +759,7 @@ fn get_trustline_balance(
                 &[],
             ));
         }
-        if tl.balance > max {
+        if balance > max {
             return Err(host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -759,7 +767,7 @@ fn get_trustline_balance(
                 &[],
             ));
         }
-        Ok(tl.balance)
+        Ok(balance)
     })
 }
 
@@ -827,19 +835,19 @@ fn get_trustline_flags(
     let lk = host.to_trustline_key(account_id, asset)?;
     host.with_mut_storage(|storage| {
         let lazy_le = read_trustline_entry(host, storage, &lk)?;
-        let le = storage::from_lazy_entry(&lazy_le)?;
-
-        let tl = match &le.data {
-            LedgerEntryData::Trustline(tl) => Ok(tl),
-            _ => Err(host.err(
+        // Use lazy accessor to read flags directly from XDR bytes.
+        let data = lazy_le.data();
+        let lazy_tl = data.as_trustline().ok_or_else(|| {
+            host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
                 "unexpected entry found",
                 &[],
-            )),
-        }?;
+            )
+        })?;
+        let tl_flags = lazy_tl.flags();
 
-        Ok(tl.flags)
+        Ok(tl_flags)
     })
 }
 
@@ -1036,7 +1044,7 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
                 &[addr.as_object().to_val()],
             )
         })?;
-        let acc_entry = storage::from_lazy_entry(&lazy_acc_entry)?;
+        let acc_entry = storage::from_lazy_entry(&lazy_acc_entry)?; // COW: mutation path
 
         let mut ae = match &acc_entry.data {
             LedgerEntryData::Account(ae) => ae.metered_clone(e)?,

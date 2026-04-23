@@ -1,4 +1,4 @@
-use soroban_env_common::{xdr::ScBytes, Env};
+use soroban_env_common::{xdr::{ScBytes, ScVal}, Env};
 
 use crate::{
     budget::Budget,
@@ -18,7 +18,11 @@ fn ledger_network_id() -> Result<(), HostError> {
         li.network_id = [7; 32];
     })?;
     let obj = host.get_ledger_network_id()?;
-    let np = host.visit_obj(obj, |np: &ScBytes| Ok(np.to_vec()))?;
+    let scval = host.deserialize_obj(obj)?;
+    let np = match scval {
+        ScVal::Bytes(b) => b.to_vec(),
+        _ => panic!("expected bytes"),
+    };
     assert_eq!(np, vec![7; 32],);
     Ok(())
 }

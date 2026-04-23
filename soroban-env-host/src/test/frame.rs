@@ -35,7 +35,7 @@ fn has_frame() -> Result<(), HostError> {
 
     // Host has a frame when executing a contract.
     let id = [0u8; 32];
-    let address = host.add_host_object(ScAddress::Contract(ContractId(Hash(id))))?;
+    let address = host.add_obj_address(ScAddress::Contract(ContractId(Hash(id))))?;
     host.register_test_contract(address, Rc::new(NoopContractFunctionSet))?;
     host.with_test_contract_frame(
         ContractId(Hash(id)),
@@ -60,7 +60,7 @@ fn try_with_test_contract_frame_has_frame() -> Result<(), HostError> {
 
     // Host has a frame when executing a contract.
     let id = [0u8; 32];
-    let address = host.add_host_object(ScAddress::Contract(ContractId(Hash(id))))?;
+    let address = host.add_obj_address(ScAddress::Contract(ContractId(Hash(id))))?;
     host.register_test_contract(address, Rc::new(NoopContractFunctionSet))?;
     host.try_with_test_contract_frame(
         ContractId(Hash(id)),
@@ -82,7 +82,7 @@ fn try_with_test_contract_frame_catches_host_error() -> Result<(), HostError> {
     // Setup host and contract
     let host = observe_host!(Host::test_host_with_recording_footprint());
     let id = [0u8; 32];
-    let address = host.add_host_object(ScAddress::Contract(ContractId(Hash(id))))?;
+    let address = host.add_obj_address(ScAddress::Contract(ContractId(Hash(id))))?;
     host.register_test_contract(address, Rc::new(NoopContractFunctionSet))?;
 
     // Cause a HostError inside the contract frame
@@ -113,7 +113,7 @@ fn try_with_test_contract_frame_catches_panic() -> Result<(), HostError> {
     let host = observe_host!(Host::test_host_with_recording_footprint());
     host.set_diagnostic_level(crate::DiagnosticLevel::Debug)?;
     let id = [0u8; 32];
-    let address = host.add_host_object(ScAddress::Contract(ContractId(Hash(id))))?;
+    let address = host.add_obj_address(ScAddress::Contract(ContractId(Hash(id))))?;
     host.register_test_contract(address, Rc::new(NoopContractFunctionSet))?;
 
     // Cause a panic inside the contract frame

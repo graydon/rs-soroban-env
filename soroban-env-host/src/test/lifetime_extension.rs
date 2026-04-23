@@ -19,16 +19,18 @@ impl InstanceCodeTest {
         let contract_id = host.register_test_contract_wasm(CONTRACT_STORAGE);
         let hash = host.contract_id_from_address(contract_id).unwrap();
 
-        let code = if let ContractExecutable::Wasm(hash) = host
-            .retrieve_contract_instance_from_storage(
-                &host.contract_instance_ledger_key(&hash).unwrap(),
-            )
-            .unwrap()
-            .executable
-        {
-            hash
-        } else {
-            panic!("Expected Wasm executable")
+        let code = {
+            let lazy_instance = host
+                .retrieve_contract_instance_from_storage(
+                    &host.contract_instance_ledger_key(&hash).unwrap(),
+                )
+                .unwrap();
+            let lazy_exec = lazy_instance.executable();
+            if let Some(lazy_hash) = lazy_exec.as_wasm() {
+                crate::xdr::Hash::try_from(&lazy_hash).unwrap()
+            } else {
+                panic!("Expected Wasm executable")
+            }
         };
 
         host.set_ledger_info(crate::LedgerInfo {

@@ -307,7 +307,7 @@ impl Host {
         let wasm_hash = self.upload_wasm(self.bytes_new_from_slice(contract_wasm)?)?;
         self.set_source_account(account.clone())?;
         let contract_address = self.create_contract(
-            self.add_host_object(ScAddress::Account(account.clone()))?,
+            self.add_obj_address(ScAddress::Account(account.clone()))?,
             wasm_hash,
             self.bytes_new_from_slice(&salt)?,
         )?;

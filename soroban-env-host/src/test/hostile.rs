@@ -1,13 +1,12 @@
 use crate::{
     budget::{AsBudget, Budget},
-    host_object::HostVec,
     meta,
     storage::Storage,
     testutils::{
         generate_account_id, generate_bytes_array, interface_meta_with_custom_versions,
         wasm as wasm_util,
     },
-    xdr::{AccountId, ContractCostType, PublicKey, ScErrorCode, ScErrorType, Uint256},
+    xdr::{AccountId, ContractCostType, PublicKey, ScErrorCode, ScErrorType, ScVec, Uint256},
     DiagnosticLevel, Env, EnvBase, Error, Host, HostError, Symbol, SymbolSmall, Tag, TryIntoVal,
     Val, VecObject,
 };
@@ -22,7 +21,7 @@ fn hostile_iloop_traps() -> Result<(), HostError> {
     let res = host.call(
         contract_id_obj,
         Symbol::try_from_small_str("iloop")?,
-        host.add_host_object(HostVec::new())?,
+        host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
     );
     assert!(HostError::result_matches_err(
         res,
@@ -39,7 +38,7 @@ fn hostile_badack_traps() -> Result<(), HostError> {
     let res = host.call(
         contract_id_obj,
         Symbol::try_from_small_str("badack")?,
-        host.add_host_object(HostVec::new())?,
+        host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
     );
 
     assert!(HostError::result_matches_err(
@@ -57,7 +56,7 @@ fn hostile_oob1_traps() -> Result<(), HostError> {
     let res = host.call(
         contract_id_obj,
         Symbol::try_from_small_str("oob1")?,
-        host.add_host_object(HostVec::new())?,
+        host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
     );
 
     assert!(HostError::result_matches_err(
@@ -75,7 +74,7 @@ fn hostile_oob2_traps() -> Result<(), HostError> {
     let res = host.call(
         contract_id_obj,
         Symbol::try_from_small_str("oob2")?,
-        host.add_host_object(HostVec::new())?,
+        host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
     );
     assert!(HostError::result_matches_err(
         res,
@@ -97,7 +96,7 @@ fn hostile_objs_traps() -> Result<(), HostError> {
     let res = host.call(
         contract_id_obj,
         Symbol::try_from_small_str("objs")?,
-        host.add_host_object(HostVec::new())?,
+        host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
     );
 
     assert!(HostError::result_matches_err(
@@ -307,7 +306,7 @@ fn excessive_memory_growth() -> Result<(), HostError> {
         let res = host.call(
             contract_id_obj,
             Symbol::try_from_small_str("test")?,
-            host.add_host_object(HostVec::new())?,
+            host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
         );
         assert!(HostError::result_matches_err(
             res,
@@ -329,7 +328,7 @@ fn excessive_memory_growth() -> Result<(), HostError> {
         let res = host.call(
             contract_id_obj,
             Symbol::try_from_small_str("test")?,
-            host.add_host_object(HostVec::new())?,
+            host.add_obj_vec_scval(ScVec(vec![].try_into()?))?,
         );
         assert!(res.is_ok());
         // initial 1 page + 32 extra pages has been allocated
@@ -719,9 +718,9 @@ fn test_indirect_call_via_table_access() -> Result<(), HostError> {
     host.budget_ref().reset_unlimited()?;
 
     let call_fn = |raw_bits: u64| -> Result<Val, HostError> {
-        // construct HostVec directly to avoid the check_val_integrety
-        let hv = HostVec::from_vec(vec![Val::from_payload(raw_bits)])?;
-        let args = host.add_host_object(hv)?;
+        // construct args directly to avoid the check_val_integrety
+        let scval = host.from_host_val(Val::from_payload(raw_bits))?;
+        let args = host.add_obj_vec_scval(ScVec(vec![scval].try_into()?))?;
         host.call(contract_id_obj, Symbol::try_from_small_str("test")?, args)
     };
 

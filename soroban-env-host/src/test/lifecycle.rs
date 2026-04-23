@@ -260,7 +260,7 @@ fn create_contract_using_parent_id_test() {
     let host = test_host();
     let parent_contract_id = create_contract_from_source_account(&host, CREATE_CONTRACT);
     let parent_contract_address = host
-        .add_host_object(ScAddress::Contract(parent_contract_id.clone()))
+        .add_obj_address(ScAddress::Contract(parent_contract_id.clone()))
         .unwrap();
     let salt = generate_bytes_array(&host);
     let child_pre_image = HashIdPreimage::ContractId(HashIdPreimageContractId {
@@ -896,11 +896,17 @@ mod cap_54_55_56 {
 
     fn clobber_refined_cost_model(host: &Host, contract_id: ContractId) -> Result<(), HostError> {
         let contract_key = host.contract_instance_ledger_key(&contract_id)?;
-        let ContractExecutable::Wasm(wasm_hash) = host
-            .retrieve_contract_instance_from_storage(&contract_key)?
-            .executable
-        else {
-            panic!("expected Wasm executable");
+        let wasm_hash = {
+            let lazy_instance = host
+                .retrieve_contract_instance_from_storage(&contract_key)?
+                .executable();
+            if let Some(lazy_hash) = lazy_instance.as_wasm() {
+                xdr::Hash::try_from(&lazy_hash).map_err(|_| {
+                    HostError::from((xdr::ScErrorType::Storage, xdr::ScErrorCode::InternalError))
+                })?
+            } else {
+                panic!("expected Wasm executable");
+            }
         };
         let code_key = Rc::new(LedgerKey::ContractCode(xdr::LedgerKeyContractCode {
             hash: wasm_hash,
@@ -932,7 +938,7 @@ mod cap_54_55_56 {
             call_hostname,
             contract_cost_model_mode,
         )?;
-        let contract = host.add_host_object(crate::xdr::ScAddress::Contract(contract_id))?;
+        let contract = host.add_obj_address(crate::xdr::ScAddress::Contract(contract_id))?;
         let _ = host.call(
             contract,
             Symbol::try_from_small_str("test")?,
@@ -1118,7 +1124,7 @@ mod cap_54_55_56 {
             OldContractWithNoCostInputs,
         )?;
 
-        let contract = host.add_host_object(crate::xdr::ScAddress::Contract(contract_id))?;
+        let contract = host.add_obj_address(crate::xdr::ScAddress::Contract(contract_id))?;
         let test_symbol = Symbol::try_from_small_str("test")?;
         let args = host.vec_new()?;
         let _ = host.call(contract, test_symbol, args)?;
@@ -1165,7 +1171,7 @@ mod cap_54_55_56 {
             NewContractWithCostInputs,
         )?;
 
-        let contract = host.add_host_object(crate::xdr::ScAddress::Contract(contract_id))?;
+        let contract = host.add_obj_address(crate::xdr::ScAddress::Contract(contract_id))?;
         let test_symbol = Symbol::try_from_small_str("test")?;
         let args = host.vec_new()?;
         let _ = host.call(contract, test_symbol, args)?;
@@ -1220,7 +1226,7 @@ mod cap_54_55_56 {
             "test_v_new_call_nonexistent_wasm_call",
             NewContractWithCostInputs,
         )?;
-        let contract = host.add_host_object(crate::xdr::ScAddress::Contract(contract_id))?;
+        let contract = host.add_obj_address(crate::xdr::ScAddress::Contract(contract_id))?;
 
         // Remove the wasm from the storage and footprint.
         let wasm_to_delete =
@@ -1269,7 +1275,7 @@ mod cap_54_55_56 {
             "test_v_new_call_wasm_in_footprint_but_not_storage_call",
             NewContractWithCostInputs,
         )?;
-        let contract = host.add_host_object(crate::xdr::ScAddress::Contract(contract_id))?;
+        let contract = host.add_obj_address(crate::xdr::ScAddress::Contract(contract_id))?;
 
         // Remove the wasm from storage by setting its value to `None`.
         let wasm_to_delete =
@@ -1310,7 +1316,7 @@ mod cap_54_55_56 {
             "test_v_new_call_runtime_deleted_wasm_call",
             NewContractWithCostInputs,
         )?;
-        let contract = host.add_host_object(crate::xdr::ScAddress::Contract(contract_id))?;
+        let contract = host.add_obj_address(crate::xdr::ScAddress::Contract(contract_id))?;
 
         // Cache is built here, wasm is present, so call succeeds.
         let test_symbol = Symbol::try_from_small_str("test")?;
@@ -1565,7 +1571,7 @@ mod cap_58_constructor {
                         .unwrap();
                         let err = host
                             .call(
-                                host.add_host_object(ScAddress::Contract(contract_id))
+                                host.add_obj_address(ScAddress::Contract(contract_id))
                                     .unwrap(),
                                 Symbol::try_from_small_str("get_data").unwrap(),
                                 test_vec![&host, Symbol::try_from_small_str("key").unwrap()]
@@ -1615,7 +1621,7 @@ mod cap_58_constructor {
                         create_contract_with_deployer(&host, wasm, deploy_fn, vec![]).unwrap();
                     let err = host
                         .call(
-                            host.add_host_object(contract_address).unwrap(),
+                            host.add_obj_address(contract_address).unwrap(),
                             Symbol::try_from_small_str("get_data").unwrap(),
                             test_vec![&host, Symbol::try_from_small_str("key").unwrap()]
                                 .as_object(),
@@ -1735,7 +1741,7 @@ mod cap_58_constructor {
                         .unwrap();
                         let res: u32 = host
                             .call(
-                                host.add_host_object(ScAddress::Contract(contract_id))
+                                host.add_obj_address(ScAddress::Contract(contract_id))
                                     .unwrap(),
                                 Symbol::try_from_small_str("get_data").unwrap(),
                                 test_vec![&host, Symbol::try_from_small_str("key").unwrap()]
@@ -1762,7 +1768,7 @@ mod cap_58_constructor {
                     .unwrap();
                     let res: u32 = host
                         .call(
-                            host.add_host_object(contract_address).unwrap(),
+                            host.add_obj_address(contract_address).unwrap(),
                             Symbol::try_from_small_str("get_data").unwrap(),
                             test_vec![&host, Symbol::try_from_small_str("key").unwrap()]
                                 .as_object(),
@@ -1909,7 +1915,7 @@ mod cap_58_constructor {
                 );
                 let res: u32 = host
                     .call(
-                        host.add_host_object(ScAddress::Contract(contract_id))
+                        host.add_obj_address(ScAddress::Contract(contract_id))
                             .unwrap(),
                         Symbol::try_from_small_str("get_data").unwrap(),
                         test_vec![&host, Symbol::try_from_small_str("key").unwrap()].as_object(),
@@ -2095,7 +2101,7 @@ mod cap_58_constructor {
 
                 let res: u32 = host
                     .call(
-                        host.add_host_object(contract_address).unwrap(),
+                        host.add_obj_address(contract_address).unwrap(),
                         Symbol::try_from_small_str("get_data").unwrap(),
                         test_vec![&host, Symbol::try_from_small_str("key").unwrap()].as_object(),
                     )
@@ -2120,7 +2126,7 @@ mod cap_58_constructor {
                 .unwrap();
                 let res: u32 = host
                     .call(
-                        host.add_host_object(contract_address).unwrap(),
+                        host.add_obj_address(contract_address).unwrap(),
                         Symbol::try_from_small_str("get_data").unwrap(),
                         test_vec![&host, Symbol::try_from_small_str("key").unwrap()].as_object(),
                     )
@@ -2212,7 +2218,7 @@ mod cap_58_constructor {
 
                 let res: u32 = host
                     .call(
-                        host.add_host_object(ScAddress::Contract(contract_id))
+                        host.add_obj_address(ScAddress::Contract(contract_id))
                             .unwrap(),
                         Symbol::try_from_small_str("get_data").unwrap(),
                         test_vec![&host, Symbol::try_from_small_str("key").unwrap()].as_object(),
@@ -2712,10 +2718,10 @@ mod cap_68_executable_getter {
     fn get_non_existent_executable() {
         let host = observe_host!(Host::test_host_with_recording_footprint());
         let contract_address = host
-            .add_host_object(ScAddress::Contract(ContractId([0; 32].into())))
+            .add_obj_address(ScAddress::Contract(ContractId([0; 32].into())))
             .unwrap();
         let account_address = host
-            .add_host_object(ScAddress::Account(AccountId(
+            .add_obj_address(ScAddress::Account(AccountId(
                 PublicKey::PublicKeyTypeEd25519([0; 32].into()),
             )))
             .unwrap();
@@ -2736,7 +2742,7 @@ mod cap_68_executable_getter {
         let account_id = AccountId(PublicKey::PublicKeyTypeEd25519([0; 32].into()));
         create_account(&host, &account_id, vec![], 0, 0, [0; 4], None, None, 0);
         let account_address = host
-            .add_host_object(ScAddress::Account(account_id))
+            .add_obj_address(ScAddress::Account(account_id))
             .unwrap();
         let executable = AddressExecutable::try_from_val(
             &*host,

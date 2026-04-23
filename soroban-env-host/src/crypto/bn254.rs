@@ -16,8 +16,7 @@ use crate::crypto::metered_scalar::MeteredScalar;
 use crate::crypto::PointValidationMode;
 use crate::{
     budget::AsBudget,
-    host_object::HostVec,
-    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType},
+    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType, ScVal},
     Bool, BytesObject, Env, Host, HostError, TryFromVal, U256Val, Val, VecObject,
 };
 
@@ -208,46 +207,45 @@ impl Host {
         // because if a point is on the curve, it's automatically in the subgroup for BN254 G1.
         let check_on_curve = !matches!(validation_mode, PointValidationMode::NoCheck);
 
-        self.visit_obj(bo, |bytes: &ScBytes| {
-            if self
-                .bn254_validate_flags_and_check_infinity::<BN254_G1_SERIALIZED_SIZE>(bytes, "G1")?
-            {
-                return Ok(G1Affine::zero());
+        let scval = self.deserialize_obj(bo)?;
+        match scval {
+            ScVal::Bytes(bytes) => {
+                if self
+                    .bn254_validate_flags_and_check_infinity::<BN254_G1_SERIALIZED_SIZE>(&bytes, "G1")?
+                {
+                    return Ok(G1Affine::zero());
+                }
+                let mut x = [0u8; BN254_FP_SERIALIZED_SIZE];
+                let mut y = [0u8; BN254_FP_SERIALIZED_SIZE];
+                self.metered_copy_byte_slice(
+                    &mut x,
+                    bytes
+                        .get(0..BN254_FP_SERIALIZED_SIZE)
+                        .ok_or_else(|| self.bn254_err_invalid_input("G1 X coordinate out of bounds"))?,
+                )?;
+                self.metered_copy_byte_slice(
+                    &mut y,
+                    bytes
+                        .get(BN254_FP_SERIALIZED_SIZE..BN254_G1_SERIALIZED_SIZE)
+                        .ok_or_else(|| self.bn254_err_invalid_input("G1 Y coordinate out of bounds"))?,
+                )?;
+                let fp_x = self
+                    .bn254_field_element_deserialize::<BN254_FP_SERIALIZED_SIZE, Fp>(&x, "bn254 Fp")?;
+                let fp_y = self
+                    .bn254_field_element_deserialize::<BN254_FP_SERIALIZED_SIZE, Fp>(&y, "bn254 Fp")?;
+                let pt = G1Affine::new_unchecked(fp_x, fp_y);
+                if check_on_curve
+                    && !self.bn254_check_point_is_on_curve(
+                        &pt,
+                        &ContractCostType::Bn254G1CheckPointOnCurve,
+                    )?
+                {
+                    return Err(self.bn254_err_invalid_input("bn254 G1: point not on curve"));
+                }
+                Ok(pt)
             }
-            let mut x = [0u8; BN254_FP_SERIALIZED_SIZE];
-            let mut y = [0u8; BN254_FP_SERIALIZED_SIZE];
-            // Size already validated by bn254_validate_flags_and_check_infinity
-            // These slices are guaranteed to be in bounds due to the size check,
-            // but we use explicit checks for defense in depth
-            self.metered_copy_byte_slice(
-                &mut x,
-                bytes
-                    .get(0..BN254_FP_SERIALIZED_SIZE)
-                    .ok_or_else(|| self.bn254_err_invalid_input("G1 X coordinate out of bounds"))?,
-            )?;
-            self.metered_copy_byte_slice(
-                &mut y,
-                bytes
-                    .get(BN254_FP_SERIALIZED_SIZE..BN254_G1_SERIALIZED_SIZE)
-                    .ok_or_else(|| self.bn254_err_invalid_input("G1 Y coordinate out of bounds"))?,
-            )?;
-            let fp_x = self
-                .bn254_field_element_deserialize::<BN254_FP_SERIALIZED_SIZE, Fp>(&x, "bn254 Fp")?;
-            let fp_y = self
-                .bn254_field_element_deserialize::<BN254_FP_SERIALIZED_SIZE, Fp>(&y, "bn254 Fp")?;
-            let pt = G1Affine::new_unchecked(fp_x, fp_y);
-            // check point is on curve
-            if check_on_curve
-                && !self.bn254_check_point_is_on_curve(
-                    &pt,
-                    &ContractCostType::Bn254G1CheckPointOnCurve,
-                )?
-            {
-                return Err(self.bn254_err_invalid_input("bn254 G1: point not on curve"));
-            }
-            // G1 point does not require subgroup check, if it is on the curve
-            Ok(pt)
-        })
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     // This does not take PointValidationMode because we only support host functions
@@ -256,52 +254,51 @@ impl Host {
         &self,
         bo: BytesObject,
     ) -> Result<G2Affine, HostError> {
-        self.visit_obj(bo, |bytes: &ScBytes| {
-            if self
-                .bn254_validate_flags_and_check_infinity::<BN254_G2_SERIALIZED_SIZE>(bytes, "G2")?
-            {
-                return Ok(G2Affine::zero());
+        let scval = self.deserialize_obj(bo)?;
+        match scval {
+            ScVal::Bytes(bytes) => {
+                if self
+                    .bn254_validate_flags_and_check_infinity::<BN254_G2_SERIALIZED_SIZE>(&bytes, "G2")?
+                {
+                    return Ok(G2Affine::zero());
+                }
+                let mut x = [0u8; BN254_FP2_SERIALIZED_SIZE];
+                let mut y = [0u8; BN254_FP2_SERIALIZED_SIZE];
+                self.metered_copy_byte_slice(
+                    &mut x,
+                    bytes
+                        .get(0..BN254_FP2_SERIALIZED_SIZE)
+                        .ok_or_else(|| self.bn254_err_invalid_input("G2 X coordinate out of bounds"))?,
+                )?;
+                self.metered_copy_byte_slice(
+                    &mut y,
+                    bytes
+                        .get(BN254_FP2_SERIALIZED_SIZE..BN254_G2_SERIALIZED_SIZE)
+                        .ok_or_else(|| self.bn254_err_invalid_input("G2 Y coordinate out of bounds"))?,
+                )?;
+                let fp2_x = self.bn254_field_element_deserialize::<BN254_FP2_SERIALIZED_SIZE, Fp2>(
+                    &x,
+                    "bn254 Fp2",
+                )?;
+                let fp2_y = self.bn254_field_element_deserialize::<BN254_FP2_SERIALIZED_SIZE, Fp2>(
+                    &y,
+                    "bn254 Fp2",
+                )?;
+                let pt = G2Affine::new_unchecked(fp2_x, fp2_y);
+                if !self
+                    .bn254_check_point_is_on_curve(&pt, &ContractCostType::Bn254G2CheckPointOnCurve)?
+                {
+                    return Err(self.bn254_err_invalid_input("bn254 G2: point not on curve"));
+                }
+                if !self.bn254_check_g2_point_is_in_subgroup(&pt)? {
+                    return Err(
+                        self.bn254_err_invalid_input("bn254 G2: point not in the correct subgroup")
+                    );
+                }
+                Ok(pt)
             }
-            let mut x = [0u8; BN254_FP2_SERIALIZED_SIZE];
-            let mut y = [0u8; BN254_FP2_SERIALIZED_SIZE];
-            // Size already validated by bn254_validate_flags_and_check_infinity
-            // These slices are guaranteed to be in bounds due to the size check,
-            // but we use explicit checks for defense in depth
-            self.metered_copy_byte_slice(
-                &mut x,
-                bytes
-                    .get(0..BN254_FP2_SERIALIZED_SIZE)
-                    .ok_or_else(|| self.bn254_err_invalid_input("G2 X coordinate out of bounds"))?,
-            )?;
-            self.metered_copy_byte_slice(
-                &mut y,
-                bytes
-                    .get(BN254_FP2_SERIALIZED_SIZE..BN254_G2_SERIALIZED_SIZE)
-                    .ok_or_else(|| self.bn254_err_invalid_input("G2 Y coordinate out of bounds"))?,
-            )?;
-            let fp2_x = self.bn254_field_element_deserialize::<BN254_FP2_SERIALIZED_SIZE, Fp2>(
-                &x,
-                "bn254 Fp2",
-            )?;
-            let fp2_y = self.bn254_field_element_deserialize::<BN254_FP2_SERIALIZED_SIZE, Fp2>(
-                &y,
-                "bn254 Fp2",
-            )?;
-            let pt = G2Affine::new_unchecked(fp2_x, fp2_y);
-            // check point is on curve
-            if !self
-                .bn254_check_point_is_on_curve(&pt, &ContractCostType::Bn254G2CheckPointOnCurve)?
-            {
-                return Err(self.bn254_err_invalid_input("bn254 G2: point not on curve"));
-            }
-            // G2 point needs subgroup check
-            if !self.bn254_check_g2_point_is_in_subgroup(&pt)? {
-                return Err(
-                    self.bn254_err_invalid_input("bn254 G2: point not in the correct subgroup")
-                );
-            }
-            Ok(pt)
-        })
+            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        }
     }
 
     pub(crate) fn bn254_g1_affine_serialize_uncompressed(
@@ -413,16 +410,15 @@ impl Host {
         )?;
 
         let mut points: Vec<G1Affine> = Vec::with_capacity(len as usize);
-        let _ = self.visit_obj(vp, |vp: &HostVec| {
-            for p in vp.iter() {
-                let pp = self.bn254_g1_affine_deserialize(
-                    BytesObject::try_from_val(self, p)?,
-                    PointValidationMode::CheckOnCurveAndInSubgroup,
-                )?;
-                points.push(pp);
-            }
-            Ok(())
-        })?;
+        let elems = self.scvec_from_obj(vp)?;
+        for scval in elems.iter() {
+            let p = self.to_host_val(scval)?;
+            let pp = self.bn254_g1_affine_deserialize(
+                BytesObject::try_from_val(self, &p)?,
+                PointValidationMode::CheckOnCurveAndInSubgroup,
+            )?;
+            points.push(pp);
+        }
         Ok(points)
     }
 
@@ -437,13 +433,12 @@ impl Host {
         )?;
 
         let mut points: Vec<G2Affine> = Vec::with_capacity(len as usize);
-        let _ = self.visit_obj(vp, |vp: &HostVec| {
-            for p in vp.iter() {
-                let pp = self.bn254_g2_affine_deserialize(BytesObject::try_from_val(self, p)?)?;
-                points.push(pp);
-            }
-            Ok(())
-        })?;
+        let elems = self.scvec_from_obj(vp)?;
+        for scval in elems.iter() {
+            let p = self.to_host_val(scval)?;
+            let pp = self.bn254_g2_affine_deserialize(BytesObject::try_from_val(self, &p)?)?;
+            points.push(pp);
+        }
         Ok(points)
     }
 
@@ -455,13 +450,12 @@ impl Host {
             Some(len as u64 * 32), // Fr is 32 bytes
         )?;
         scalars.reserve(len as usize);
-        let _ = self.visit_obj(vs, |vs: &HostVec| {
-            for s in vs.iter() {
-                let ss = self.bn254_fr_from_u256val(U256Val::try_from_val(self, s)?)?;
-                scalars.push(ss);
-            }
-            Ok(())
-        })?;
+        let elems = self.scvec_from_obj(vs)?;
+        for scval in elems.iter() {
+            let s = self.to_host_val(scval)?;
+            let ss = self.bn254_fr_from_u256val(U256Val::try_from_val(self, &s)?)?;
+            scalars.push(ss);
+        }
         Ok(scalars)
     }
 

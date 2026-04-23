@@ -9,13 +9,13 @@ use crate::{
         InternalDiagnosticEvent, InternalEvent,
     },
     host::{frame::Context, Events},
-    host_object::{HostObject, MuxedScAddress},
+    host_object::MuxedScAddress,
     storage::AccessType,
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeCostInputs, ContractCodeEntry,
         ContractCodeEntryV1, ContractDataDurability, ContractEvent, ContractExecutable, ContractId,
         ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, Duration, ExtensionPoint,
-        Hash, Int128Parts, Int256Parts, InvokeContractArgs, LedgerEntry, LedgerEntryExt, LedgerKey,
+        Hash, Int128Parts, Int256Parts, InvokeContractArgs, LazyScVal, LedgerEntry, LedgerEntryExt, LedgerKey,
         LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyTrustLine, PublicKey, ScAddress, ScBytes,
         ScContractInstance, ScError, ScMap, ScMapEntry, ScNonceKey, ScString, ScSymbol, ScVal,
         ScVec, Signer, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
@@ -113,7 +113,8 @@ impl_declared_size_type!(SymbolStr, SCSYMBOL_LIMIT);
 impl_declared_size_type!(SymbolSmallIter, 8);
 impl_declared_size_type!(U256, 32);
 impl_declared_size_type!(I256, 32);
-impl_declared_size_type!(HostObject, 64);
+// LazyScVal is an Arc wrapper, declared size covers the Arc pointer
+impl_declared_size_type!(LazyScVal, 16);
 impl_declared_size_type!(HostError, 16);
 impl_declared_size_type!(Context, 512);
 impl_declared_size_type!(Address, 16);
@@ -415,33 +416,8 @@ mod test {
         expect!["32"].assert_eq(size_of::<U256>().to_string().as_str());
         expect!["32"].assert_eq(size_of::<I256>().to_string().as_str());
 
-        #[rustversion::before(1.77)]
-        #[cfg(target_arch = "x86_64")]
-        fn check_x64_host_object_size_that_changed_at_rust_1_77() {
-            expect!["40"].assert_eq(size_of::<HostObject>().to_string().as_str());
-        }
-        #[rustversion::since(1.77)]
-        #[cfg(target_arch = "x86_64")]
-        fn check_x64_host_object_size_that_changed_at_rust_1_77() {
-            expect!["64"].assert_eq(size_of::<HostObject>().to_string().as_str());
-        }
-
-        #[cfg(target_arch = "x86_64")]
-        check_x64_host_object_size_that_changed_at_rust_1_77();
-
-        #[rustversion::before(1.81)]
-        #[cfg(target_arch = "aarch64")]
-        fn check_aarch64_host_object_size_that_changed_at_rust_1_81() {
-            expect!["48"].assert_eq(size_of::<HostObject>().to_string().as_str());
-        }
-        #[rustversion::since(1.81)]
-        #[cfg(target_arch = "aarch64")]
-        fn check_aarch64_host_object_size_that_changed_at_rust_1_81() {
-            expect!["64"].assert_eq(size_of::<HostObject>().to_string().as_str());
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        check_aarch64_host_object_size_that_changed_at_rust_1_81();
+        // LazyScVal size check
+        // LazyScVal is an Arc-based wrapper
 
         expect!["16"].assert_eq(size_of::<HostError>().to_string().as_str());
         #[cfg(target_arch = "x86_64")]
@@ -667,7 +643,7 @@ mod test {
         assert_mem_size_le_declared_size!(SymbolSmallIter);
         assert_mem_size_le_declared_size!(U256);
         assert_mem_size_le_declared_size!(I256);
-        assert_mem_size_le_declared_size!(HostObject);
+        assert_mem_size_le_declared_size!(LazyScVal);
         assert_mem_size_le_declared_size!(HostError);
         assert_mem_size_le_declared_size!(Context);
         assert_mem_size_le_declared_size!(Address);

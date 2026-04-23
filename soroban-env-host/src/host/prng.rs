@@ -3,8 +3,7 @@ use crate::{
     budget::Budget,
     crypto::{chacha20_fill_bytes, unbias_prng_seed},
     host::metered_clone::MeteredClone,
-    host_object::HostVec,
-    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType},
+    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType, ScVal},
     HostError,
 };
 use rand::{distributions::Uniform, prelude::Distribution, seq::SliceRandom, RngCore};
@@ -118,25 +117,15 @@ impl Prng {
         Ok(u.sample(&mut self.0))
     }
 
-    pub(crate) fn vec_shuffle(
+    pub(crate) fn scval_vec_shuffle(
         &mut self,
-        v: &HostVec,
+        v: &mut Vec<ScVal>,
         budget: &Budget,
-    ) -> Result<HostVec, HostError> {
-        // A Fisher-Yates shuffle essentially does one call to u64_in_range for
-        // each element of the input vector, followed by an optional swap. Since
-        // u64_in_range is itself a rejection sampling operation (to avoid bias)
-        // we can't be 100% sure how many draws it'll make, but the expected
-        // number of draws is 1. To give ourselves a little more safety we'll
-        // double that number. We also give the implementation freedom to draw a
-        // 64-bit (8-byte) value per index, meaning we charge for generating 2 *
-        // 8 * len bytes.
-        let mut v2 = v.metered_clone(budget)?;
-        // We charge for both the PRNG draws and the swaps here (as "memcpys").
+    ) -> Result<(), HostError> {
         self.charge_prng_bytes(budget, 16u64.saturating_mul(v.len() as u64))?;
         budget.charge(ContractCostType::MemCpy, Some(v.len() as u64))?;
-        v2.as_mut_slice().shuffle(&mut self.0);
-        Ok(v2)
+        v.as_mut_slice().shuffle(&mut self.0);
+        Ok(())
     }
 
     pub(crate) fn bytes_new(&mut self, size: u32, budget: &Budget) -> Result<ScBytes, HostError> {

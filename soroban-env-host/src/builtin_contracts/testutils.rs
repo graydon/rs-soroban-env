@@ -39,7 +39,7 @@ pub(crate) fn account_to_address(host: &Host, account_id: AccountId) -> Address 
     Address::try_from_val(
         host,
         &host
-            .add_host_object(ScAddress::Account(account_id))
+            .add_obj_address(ScAddress::Account(account_id))
             .unwrap(),
     )
     .unwrap()
@@ -49,7 +49,7 @@ pub(crate) fn contract_id_to_address(host: &Host, contract_id: [u8; 32]) -> Addr
     Address::try_from_val(
         host,
         &host
-            .add_host_object(ScAddress::Contract(ContractId(Hash(contract_id))))
+            .add_obj_address(ScAddress::Contract(ContractId(Hash(contract_id))))
             .unwrap(),
     )
     .unwrap()
@@ -131,7 +131,7 @@ impl<'a> TestSigner<'a> {
     }
 
     pub(crate) fn address(&self, host: &Host) -> Address {
-        Address::try_from_val(host, &host.add_host_object(self.sc_address()).unwrap()).unwrap()
+        Address::try_from_val(host, &host.add_obj_address(self.sc_address()).unwrap()).unwrap()
     }
 
     pub(crate) fn muxed_address(&self, host: &Host, mux_id: Option<u64>) -> MuxedAddress {
@@ -146,7 +146,7 @@ impl<'a> TestSigner<'a> {
                     });
                     MuxedAddress::try_from_val(
                         host,
-                        &host.add_host_object(MuxedScAddress(sc_address)).unwrap(),
+                        &host.add_obj_muxed_address(sc_address).unwrap(),
                     )
                     .unwrap()
                 } else {

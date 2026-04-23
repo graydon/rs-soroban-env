@@ -2,7 +2,6 @@ use std::hint::black_box;
 
 use crate::{
     cost_runner::{CostRunner, CostType},
-    host_object::HostObject,
     xdr::ContractCostType::VisitObject,
     Object,
 };
@@ -20,11 +19,8 @@ impl CostRunner for VisitObjectRun {
 
     fn run_iter(host: &crate::Host, iter: u64, sample: Self::SampleType) -> Self::RecycledType {
         let _ = black_box(
-            host.visit_obj_untyped(sample[iter as usize % sample.len()], |obj| match obj {
-                HostObject::I64(i) => Ok(*i),
-                _ => panic!("unexpected type, check HCM"),
-            })
-            .unwrap(),
+            host.get_lazy_obj(sample[iter as usize % sample.len()])
+                .unwrap(),
         );
         black_box(sample)
     }

@@ -1,17 +1,53 @@
 #[macro_export]
 macro_rules! impl_wrapping_obj_from_num {
-    ($host_fn: ident, $hot: ty, $obj: ty, $num: ty) => {
-        fn $host_fn(&self, _vmcaller: &mut VmCaller<Host>, u: $num) -> Result<$obj, HostError> {
-            self.add_host_object(<$hot>::from(u))
+    (obj_from_u64, $hot: ty, $obj: ty, $num: ty) => {
+        fn obj_from_u64(&self, _vmcaller: &mut VmCaller<Host>, u: $num) -> Result<$obj, HostError> {
+            self.add_obj_u64(u)
+        }
+    };
+    (obj_from_i64, $hot: ty, $obj: ty, $num: ty) => {
+        fn obj_from_i64(&self, _vmcaller: &mut VmCaller<Host>, u: $num) -> Result<$obj, HostError> {
+            self.add_obj_i64(u)
+        }
+    };
+    (timepoint_obj_from_u64, $hot: ty, $obj: ty, $num: ty) => {
+        fn timepoint_obj_from_u64(&self, _vmcaller: &mut VmCaller<Host>, u: $num) -> Result<$obj, HostError> {
+            self.add_obj_timepoint($crate::xdr::TimePoint::from(u))
+        }
+    };
+    (duration_obj_from_u64, $hot: ty, $obj: ty, $num: ty) => {
+        fn duration_obj_from_u64(&self, _vmcaller: &mut VmCaller<Host>, u: $num) -> Result<$obj, HostError> {
+            self.add_obj_duration($crate::xdr::Duration::from(u))
         }
     };
 }
 
 #[macro_export]
 macro_rules! impl_wrapping_obj_to_num {
-    ($host_fn: ident, $data: ty, $obj: ty, $num: ty) => {
-        fn $host_fn(&self, _vmcaller: &mut VmCaller<Host>, obj: $obj) -> Result<$num, HostError> {
-            self.visit_obj(obj, |t: &$data| Ok(t.metered_clone(self)?.into()))
+    (obj_to_u64, $data: ty, $obj: ty, $num: ty) => {
+        fn obj_to_u64(&self, _vmcaller: &mut VmCaller<Host>, obj: $obj) -> Result<$num, HostError> {
+            let lazy = self.get_lazy_obj($crate::host_object::to_object(&obj)?)?;
+            Ok(lazy.as_u64().ok_or_else(|| $crate::HostError::from(($crate::xdr::ScErrorType::Object, $crate::xdr::ScErrorCode::UnexpectedType)))?)
+        }
+    };
+    (obj_to_i64, $data: ty, $obj: ty, $num: ty) => {
+        fn obj_to_i64(&self, _vmcaller: &mut VmCaller<Host>, obj: $obj) -> Result<$num, HostError> {
+            let lazy = self.get_lazy_obj($crate::host_object::to_object(&obj)?)?;
+            Ok(lazy.as_i64().ok_or_else(|| $crate::HostError::from(($crate::xdr::ScErrorType::Object, $crate::xdr::ScErrorCode::UnexpectedType)))?)
+        }
+    };
+    (timepoint_obj_to_u64, $data: ty, $obj: ty, $num: ty) => {
+        fn timepoint_obj_to_u64(&self, _vmcaller: &mut VmCaller<Host>, obj: $obj) -> Result<$num, HostError> {
+            let lazy = self.get_lazy_obj($crate::host_object::to_object(&obj)?)?;
+            let tp = lazy.as_timepoint().ok_or_else(|| $crate::HostError::from(($crate::xdr::ScErrorType::Object, $crate::xdr::ScErrorCode::UnexpectedType)))?;
+            Ok(*tp)
+        }
+    };
+    (duration_obj_to_u64, $data: ty, $obj: ty, $num: ty) => {
+        fn duration_obj_to_u64(&self, _vmcaller: &mut VmCaller<Host>, obj: $obj) -> Result<$num, HostError> {
+            let lazy = self.get_lazy_obj($crate::host_object::to_object(&obj)?)?;
+            let d = lazy.as_duration().ok_or_else(|| $crate::HostError::from(($crate::xdr::ScErrorType::Object, $crate::xdr::ScErrorCode::UnexpectedType)))?;
+            Ok(*d)
         }
     };
 }

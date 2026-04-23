@@ -417,7 +417,7 @@ impl AuthTest {
 
     fn key_to_address(&self, key: &SigningKey) -> AddressObject {
         let sc_address = self.key_to_sc_address(key);
-        self.host.add_host_object(sc_address).unwrap()
+        self.host.add_obj_address(sc_address).unwrap()
     }
 
     fn get_addresses(&self) -> HostVec {
@@ -2212,7 +2212,7 @@ fn test_invoker_subcontract_auth_without_subcontract_calls() {
 fn test_invoker_auth_depth_limit() {
     let host = Host::test_host();
     let sc_addr = ScAddress::Contract(ContractId(Hash([0u8; 32])));
-    let addr_obj = host.add_host_object(sc_addr).unwrap();
+    let addr_obj = host.add_obj_address(sc_addr).unwrap();
     let addr = Address::try_from_val(&host, &addr_obj).unwrap();
     let fn_name = Symbol::try_from_small_str("f").unwrap();
     let args = ContractVec::new(&host).unwrap();

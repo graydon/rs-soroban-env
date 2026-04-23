@@ -71,7 +71,7 @@ fn compressed_g1(host: &Host, rng: &mut StdRng) -> Result<BytesObject, HostError
     let mut buf: Vec<u8> = Vec::with_capacity(BN254_G1_SERIALIZED_SIZE / 2);
     let g1 = G1Affine::rand(rng);
     g1.serialize_compressed(&mut buf).unwrap();
-    host.add_host_object(host.scbytes_from_slice(&buf)?)
+    host.add_obj_bytes(host.scbytes_from_slice(&buf)?)
 }
 
 fn negative_g1(host: &Host, rng: &mut StdRng) -> Result<BytesObject, HostError> {
@@ -683,17 +683,17 @@ fn hardcoded_serialization() -> Result<(), HostError> {
 
     // Extract first G1 point (64 bytes)
     let g1_1_bytes = &bytes[offset..offset + BN254_G1_SERIALIZED_SIZE];
-    let g1_1 = host.add_host_object(host.scbytes_from_slice(g1_1_bytes)?)?;
+    let g1_1 = host.add_obj_bytes(host.scbytes_from_slice(g1_1_bytes)?)?;
 
     // Extract G2 point (128 bytes)
     let g2_offset = offset + BN254_G1_SERIALIZED_SIZE;
     let g2_bytes = &bytes[g2_offset..g2_offset + BN254_G2_SERIALIZED_SIZE];
-    let g2 = host.add_host_object(host.scbytes_from_slice(g2_bytes)?)?;
+    let g2 = host.add_obj_bytes(host.scbytes_from_slice(g2_bytes)?)?;
 
     // Extract second G1 point (64 bytes)
     let g1_2_offset = g2_offset + BN254_G2_SERIALIZED_SIZE;
     let g1_2_bytes = &bytes[g1_2_offset..g1_2_offset + BN254_G1_SERIALIZED_SIZE];
-    let g1_2 = host.add_host_object(host.scbytes_from_slice(g1_2_bytes)?)?;
+    let g1_2 = host.add_obj_bytes(host.scbytes_from_slice(g1_2_bytes)?)?;
 
     {
         let double = U256Val::from_u32(2);
@@ -726,7 +726,7 @@ fn hardcoded_serialization() -> Result<(), HostError> {
     // Pass in raw infinity point
     {
         let zero = hex::decode("0".repeat(128)).unwrap();
-        let g1_zero = host.add_host_object(host.scbytes_from_slice(zero.as_slice())?)?;
+        let g1_zero = host.add_obj_bytes(host.scbytes_from_slice(zero.as_slice())?)?;
         let g1_plus_zero = host.bn254_g1_add(g1_1, g1_zero)?;
 
         assert_eq!(
