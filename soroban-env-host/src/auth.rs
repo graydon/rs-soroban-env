@@ -1972,11 +1972,9 @@ impl AccountAuthorizationTracker {
             Ok(RecordedAuthPayload {
                 address: if !self.is_transaction_source_account {
                     Some({
-                        let scval = host.deserialize_obj(self.address)?;
-                        match scval {
-                            ScVal::Address(a) => a.metered_clone(host)?,
-                            _ => return Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
-                        }
+                        let lazy = host.get_lazy_obj(self.address)?;
+                        let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+                        ScAddress::try_from(&la)?
                     })
                 } else {
                     None

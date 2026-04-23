@@ -187,14 +187,11 @@ impl Host {
         tag: &str,
     ) -> Result<Affine<P>, HostError> {
         let pt: Affine<P> = {
-            let scval = self.deserialize_obj(bo)?;
-            match scval {
-                ScVal::Bytes(bytes) => {
-                    self.validate_point_encoding::<EXPECTED_SIZE>(&bytes, tag)?;
-                    self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(bytes.as_slice(), tag)
-                }
-                _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
-            }
+            let lazy = self.get_lazy_obj(bo)?;
+            let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let src = lb.as_bytes();
+            self.validate_point_encoding::<EXPECTED_SIZE>(src, tag)?;
+            self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(src, tag)
         }?;
 
         let check_on_curve = matches!(
@@ -335,33 +332,28 @@ impl Host {
         bo: BytesObject,
         tag: &str,
     ) -> Result<T, HostError> {
-        let scval = self.deserialize_obj(bo)?;
-        match scval {
-            ScVal::Bytes(bytes) => {
-                if bytes.len() != EXPECTED_SIZE {
-                    return Err(self.err(
-                        ScErrorType::Crypto,
-                        ScErrorCode::InvalidInput,
-                        format!(
-                            "bls12-381 field element {}: invalid input length to deserialize",
-                            tag
-                        )
-                        .as_str(),
-                        &[
-                            Val::from_u32(bytes.len() as u32).into(),
-                            Val::from_u32(EXPECTED_SIZE as u32).into(),
-                        ],
-                    ));
-                }
-                let mut buf = [0u8; EXPECTED_SIZE];
-                self.metered_copy_byte_slice(&mut buf, &bytes)?;
-
-                buf.reverse();
-
-                self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(&buf, tag)
-            }
-            _ => Err(self.err(ScErrorType::Object, ScErrorCode::UnexpectedType, "expected bytes object", &[])),
+        let lazy = self.get_lazy_obj(bo)?;
+        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let src = lb.as_bytes();
+        if src.len() != EXPECTED_SIZE {
+            return Err(self.err(
+                ScErrorType::Crypto,
+                ScErrorCode::InvalidInput,
+                format!(
+                    "bls12-381 field element {}: invalid input length to deserialize",
+                    tag
+                )
+                .as_str(),
+                &[
+                    Val::from_u32(src.len() as u32).into(),
+                    Val::from_u32(EXPECTED_SIZE as u32).into(),
+                ],
+            ));
         }
+        let mut buf = [0u8; EXPECTED_SIZE];
+        self.metered_copy_byte_slice(&mut buf, src)?;
+        buf.reverse();
+        self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(&buf, tag)
     }
 
     pub(crate) fn fp_deserialize_from_bytesobj(&self, bo: BytesObject) -> Result<Fq, HostError> {

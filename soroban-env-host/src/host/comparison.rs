@@ -46,15 +46,16 @@ impl Compare<LazyScVal> for Host {
 
     fn compare(&self, a: &LazyScVal, b: &LazyScVal) -> Result<Ordering, Self::Error> {
         let _span = tracy_span!("Compare<LazyScVal>");
-        // Materialize both to ScVal and delegate to existing ScVal comparison.
-        // This is the simplest correct approach; we can optimize hot paths later.
-        let a_scval = ScVal::try_from(a).map_err(|_| {
-            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-        })?;
-        let b_scval = ScVal::try_from(b).map_err(|_| {
-            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-        })?;
-        self.as_budget().compare(&a_scval, &b_scval)
+        // Charge based on the shorter of the two serialized representations,
+        // since comparison will terminate at the first difference or at the
+        // end of the shorter value.
+        let a_len = a.as_ref().len() as u64;
+        let b_len = b.as_ref().len() as u64;
+        self.charge_budget(
+            ContractCostType::MemCmp,
+            Some(a_len.min(b_len)),
+        )?;
+        Ok(a.cmp(b))
     }
 }
 

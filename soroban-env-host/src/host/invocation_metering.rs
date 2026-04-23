@@ -627,9 +627,9 @@ impl MeteringInvocation {
         let mut address_xdr = ScAddress::Contract(Default::default());
         let mut function_name_xdr = ScSymbol::default();
         host.with_debug_mode(|| {
-            let scval = host.deserialize_obj(address)?;
-            if let ScVal::Address(a) = scval {
-                address_xdr = a;
+            let lazy = host.get_lazy_obj(address)?;
+            if let Some(la) = lazy.as_address() {
+                address_xdr = ScAddress::try_from(&la)?;
             }
             function_name_xdr = SymbolStr::try_from_val(host, &function_name)?
                 .to_string()
@@ -679,9 +679,9 @@ impl MeteringInvocation {
             .try_into()
             .unwrap_or_default();
         host.with_debug_mode(|| {
-            let scval = host.deserialize_obj(address)?;
-            if let ScVal::Address(a) = scval {
-                address_xdr = a;
+            let lazy = host.get_lazy_obj(address)?;
+            if let Some(la) = lazy.as_address() {
+                address_xdr = ScAddress::try_from(&la)?;
             }
             Ok(())
         });

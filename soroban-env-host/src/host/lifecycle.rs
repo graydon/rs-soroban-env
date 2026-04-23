@@ -218,11 +218,9 @@ impl Host {
     ) -> Result<ContractId, HostError> {
         let contract_id_preimage = ContractIdPreimage::Address(ContractIdPreimageFromAddress {
             address: {
-                let scval = self.deserialize_obj(deployer)?;
-                match scval {
-                    ScVal::Address(addr) => addr.metered_clone(self)?,
-                    _ => return Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
-                }
+                let lazy = self.get_lazy_obj(deployer)?;
+                let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+                ScAddress::try_from(&la)?
             },
             salt: self.u256_from_bytesobj_input("contract_id_salt", salt)?,
         });

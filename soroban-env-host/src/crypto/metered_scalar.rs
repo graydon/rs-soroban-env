@@ -63,14 +63,10 @@ impl MeteredScalar for BlsScalar {
             Self::from_le_bytes_mod_order(&u64::from(small).to_le_bytes())
         } else {
             let obj: U256Object = sv.try_into()?;
-            let scval = host.deserialize_obj(obj)?;
-            match scval {
-                ScVal::U256(parts) => {
-                    let u = crate::num::u256_from_pieces(parts.hi_hi, parts.hi_lo, parts.lo_hi, parts.lo_lo);
-                    Ok::<_, HostError>(Self::from_le_bytes_mod_order(&u.to_le_bytes()))
-                }
-                _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
-            }?
+            let lazy = host.get_lazy_obj(obj)?;
+            let parts = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let u = crate::num::u256_from_pieces(parts.hi_hi(), parts.hi_lo(), parts.lo_hi(), parts.lo_lo());
+            Self::from_le_bytes_mod_order(&u.to_le_bytes())
         };
         Ok(fr)
     }
@@ -116,14 +112,10 @@ impl MeteredScalar for BnScalar {
             Self::from_le_bytes_mod_order(&u64::from(small).to_le_bytes())
         } else {
             let obj: U256Object = sv.try_into()?;
-            let scval = host.deserialize_obj(obj)?;
-            match scval {
-                ScVal::U256(parts) => {
-                    let u = crate::num::u256_from_pieces(parts.hi_hi, parts.hi_lo, parts.lo_hi, parts.lo_lo);
-                    Ok::<_, HostError>(Self::from_le_bytes_mod_order(&u.to_le_bytes()))
-                }
-                _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
-            }?
+            let lazy = host.get_lazy_obj(obj)?;
+            let parts = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let u = crate::num::u256_from_pieces(parts.hi_hi(), parts.hi_lo(), parts.lo_hi(), parts.lo_lo());
+            Self::from_le_bytes_mod_order(&u.to_le_bytes())
         };
         Ok(fr)
     }

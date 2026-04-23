@@ -49,11 +49,9 @@ impl Host {
         &self,
         bytes: BytesObject,
     ) -> Result<T, HostError> {
-        let scval = self.deserialize_obj(bytes)?;
-        match scval {
-            ScVal::Bytes(hv) => self.metered_from_xdr(hv.as_slice()),
-            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
-        }
+        let lazy = self.get_lazy_obj(bytes)?;
+        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        self.metered_from_xdr(lb.as_bytes())
     }
 }
 

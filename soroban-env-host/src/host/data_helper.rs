@@ -582,11 +582,10 @@ impl Host {
         &self,
         address: AddressObject,
     ) -> Result<ContractId, HostError> {
-        let scval = self.deserialize_obj(address)?;
-        match scval {
-            ScVal::Address(addr) => self.contract_id_from_scaddress(addr.metered_clone(self)?),
-            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
-        }
+        let lazy = self.get_lazy_obj(address)?;
+        let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let addr = ScAddress::try_from(&la)?;
+        self.contract_id_from_scaddress(addr)
     }
 
     pub(super) fn put_contract_data_into_ledger(
