@@ -2,7 +2,8 @@ use crate::{
     budget::Budget,
     storage::{Footprint, Storage},
     testutils::{generate_account_id, generate_bytes_array},
-    xdr::ScVec, Host, HostError, MeteredOrdMap,
+    xdr::ScVec,
+    Host, HostError, MeteredOrdMap,
 };
 use soroban_env_common::{Env, Symbol};
 use soroban_test_wasms::COMPLEX;

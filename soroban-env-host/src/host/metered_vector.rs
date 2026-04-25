@@ -104,7 +104,7 @@ where
         iter: I,
         budget: &Budget,
     ) -> Result<Self, HostError> {
-        let _span = tracy_span!("new vec");
+        // let _span = tracy_span!("new vec");
         if let (_, Some(sz)) = iter.size_hint() {
             if u32::try_from(sz).is_err() {
                 Err(VEC_OOB.into())

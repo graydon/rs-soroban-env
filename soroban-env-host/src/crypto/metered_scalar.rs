@@ -1,6 +1,8 @@
 use crate::{
-    host::metered_clone::MeteredClone, xdr::{ContractCostType, ScVal, ScErrorType, ScErrorCode}, ConversionError, ErrorHandler, Host,
-    HostError, TryFromVal, U256Object, U256Small, U256Val, U256,
+    host::metered_clone::MeteredClone,
+    xdr::{ContractCostType, ScErrorCode, ScErrorType, ScVal},
+    ConversionError, ErrorHandler, Host, HostError, TryFromVal, U256Object, U256Small, U256Val,
+    U256,
 };
 use ark_bls12_381::Fr as BlsScalar;
 use ark_bn254::Fr as BnScalar;
@@ -64,8 +66,15 @@ impl MeteredScalar for BlsScalar {
         } else {
             let obj: U256Object = sv.try_into()?;
             let lazy = host.get_lazy_obj(obj)?;
-            let parts = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-            let u = crate::num::u256_from_pieces(parts.hi_hi(), parts.hi_lo(), parts.lo_hi(), parts.lo_lo());
+            let parts = lazy.as_u256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
+            let u = crate::num::u256_from_pieces(
+                parts.hi_hi(),
+                parts.hi_lo(),
+                parts.lo_hi(),
+                parts.lo_lo(),
+            );
             Self::from_le_bytes_mod_order(&u.to_le_bytes())
         };
         Ok(fr)
@@ -113,8 +122,15 @@ impl MeteredScalar for BnScalar {
         } else {
             let obj: U256Object = sv.try_into()?;
             let lazy = host.get_lazy_obj(obj)?;
-            let parts = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-            let u = crate::num::u256_from_pieces(parts.hi_hi(), parts.hi_lo(), parts.lo_hi(), parts.lo_lo());
+            let parts = lazy.as_u256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
+            let u = crate::num::u256_from_pieces(
+                parts.hi_hi(),
+                parts.hi_lo(),
+                parts.lo_hi(),
+                parts.lo_lo(),
+            );
             Self::from_le_bytes_mod_order(&u.to_le_bytes())
         };
         Ok(fr)

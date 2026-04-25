@@ -4,6 +4,7 @@
 /// host functions.
 use std::{cmp::max, rc::Rc};
 
+use crate::ModuleCache;
 #[cfg(any(test, feature = "recording_mode"))]
 use crate::{
     auth::RecordedAuthPayload,
@@ -25,14 +26,13 @@ use crate::{
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
         LazyHostFunction, LazyLedgerEntry, LazyLedgerFootprint, LazyLedgerKey,
-        LazySorobanAuthorizationEntry, LazySorobanResources, LazyTtlEntry, LazyVecM,
-        LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
-        LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine,
-        ScErrorCode, ScErrorType, SorobanAuthorizationEntry, SorobanResources, TtlEntry,
+        LazySorobanAuthorizationEntry, LazySorobanResources, LazyTtlEntry, LazyVecM, LedgerEntry,
+        LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey, LedgerKeyAccount,
+        LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, ScErrorCode, ScErrorType,
+        SorobanAuthorizationEntry, SorobanResources, TtlEntry,
     },
     DiagnosticLevel, Error, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
-use crate::ModuleCache;
 use crate::{storage::EntryWithLiveUntil, vm::wasm_module_memory_cost};
 #[cfg(any(test, feature = "recording_mode"))]
 use sha2::{Digest, Sha256};
@@ -154,14 +154,12 @@ fn build_restored_key_set(
     let rw_footprint = &resources.footprint.read_write;
     let mut key_set = RestoredKeySet::default();
     for e in restored_rw_entry_indices {
-        let eager_key = rw_footprint
-            .get(*e as usize)
-            .ok_or_else(|| {
-                HostError::from(Error::from_type_and_code(
-                    ScErrorType::Storage,
-                    ScErrorCode::InternalError,
-                ))
-            })?;
+        let eager_key = rw_footprint.get(*e as usize).ok_or_else(|| {
+            HostError::from(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            ))
+        })?;
         let lazy_key = LazyLedgerKey::try_from(eager_key).map_err(|_| {
             HostError::from(Error::from_type_and_code(
                 ScErrorType::Storage,
@@ -608,9 +606,7 @@ pub fn invoke_host_function_lazy(
                 ))
             })
         })
-        .metered_collect::<Result<Vec<SorobanAuthorizationEntry>, HostError>>(
-            host.as_budget(),
-        )??;
+        .metered_collect::<Result<Vec<SorobanAuthorizationEntry>, HostError>>(host.as_budget())??;
     // Convert lazy host function to eager — invoke_function destructures it.
     let host_function: HostFunction = HostFunction::try_from(&host_fn).map_err(|_| {
         HostError::from(Error::from_type_and_code(
@@ -701,9 +697,8 @@ fn storage_footprint_to_ledger_footprint(
     let mut read_write: Vec<LedgerKey> = Vec::with_capacity(footprint.0.len());
     for (key, access_type) in &footprint.0 {
         // Convert lazy key back to eager for the LedgerFootprint output
-        let eager_key = LedgerKey::try_from(key).map_err(|_| {
-            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-        })?;
+        let eager_key = LedgerKey::try_from(key)
+            .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
         match access_type {
             AccessType::ReadOnly => read_only.push(eager_key),
             AccessType::ReadWrite => read_write.push(eager_key),
@@ -896,7 +891,9 @@ pub fn invoke_host_function_in_recording_mode(
                     match disc {
                         LedgerEntryType::ContractData | LedgerEntryType::ContractCode => {
                             if let Some(live_until) = live_until {
-                                if live_until < ledger_seq && crate::storage::is_persistent_lazy_key(lk) {
+                                if live_until < ledger_seq
+                                    && crate::storage::is_persistent_lazy_key(lk)
+                                {
                                     if !matches!(*access_type, AccessType::ReadWrite) {
                                         return Err(HostError::from(Error::from_type_and_code(
                                             ScErrorType::Storage,
@@ -1267,8 +1264,7 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
         // Create lazy entry directly from raw XDR bytes — no eager decode
         let entry_bytes = entry_buf.as_ref();
         let arc_entry: Arc<[u8]> = entry_bytes.into();
-        let lazy_entry =
-            LazyLedgerEntry::try_from(arc_entry).map_err(|_| xdr_err())?;
+        let lazy_entry = LazyLedgerEntry::try_from(arc_entry).map_err(|_| xdr_err())?;
 
         // Extract key from the lazy entry using lazy accessors only —
         // navigates byte offsets, copies only key-relevant sub-slices,
@@ -1317,7 +1313,10 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             }
         }
 
-        if !footprint.0.contains_key::<LazyLedgerKey>(&lazy_key, budget)? {
+        if !footprint
+            .0
+            .contains_key::<LazyLedgerKey>(&lazy_key, budget)?
+        {
             return Err(xdr_err());
         }
         storage_map =
@@ -1456,7 +1455,10 @@ fn build_storage_map_from_lazy_entries(
             }
         }
 
-        if !footprint.0.contains_key::<LazyLedgerKey>(&lazy_key, budget)? {
+        if !footprint
+            .0
+            .contains_key::<LazyLedgerKey>(&lazy_key, budget)?
+        {
             return Err(xdr_err());
         }
         storage_map = storage_map.insert(

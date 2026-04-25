@@ -531,13 +531,11 @@ fn transfer_account_balance(
                     ext: AccountEntryExt::V0,
                 };
 
-                let new_le = storage::to_lazy_entry(
-                    &LedgerEntry {
-                        last_modified_ledger_seq: 0,
-                        data: LedgerEntryData::Account(new_account),
-                        ext: LedgerEntryExt::V0,
-                    },
-                )?;
+                let new_le = storage::to_lazy_entry(&LedgerEntry {
+                    last_modified_ledger_seq: 0,
+                    data: LedgerEntryData::Account(new_account),
+                    ext: LedgerEntryExt::V0,
+                })?;
 
                 storage.put(&lk, &new_le, None, host, None)
             }
@@ -621,7 +619,8 @@ fn transfer_trustline_balance(
         };
         if new_balance >= min_balance && new_balance <= max_balance {
             tl.balance = new_balance;
-            let updated_le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
+            let updated_le =
+                Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
             storage.put(&lk, &updated_le, None, &host, None)
         } else {
             Err(err!(
@@ -659,9 +658,8 @@ fn get_account_balance(
         let balance = lazy_ae.balance();
 
         // For min/max checks we need more fields — deserialize AccountEntry.
-        let ae = AccountEntry::try_from(&lazy_ae).map_err(|_| {
-            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-        })?;
+        let ae = AccountEntry::try_from(&lazy_ae)
+            .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
         let (min, max) = get_min_max_account_balance(host, &ae)?;
         if balance < min {
             return Err(host.err(
@@ -747,9 +745,8 @@ fn get_trustline_balance(
         let balance = lazy_tl.balance();
 
         // For min/max checks we need more fields — deserialize TrustLineEntry.
-        let tl = TrustLineEntry::try_from(&lazy_tl).map_err(|_| {
-            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-        })?;
+        let tl = TrustLineEntry::try_from(&lazy_tl)
+            .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
         let (min, max) = get_min_max_trustline_balance(host, &tl)?;
         if balance < min {
             return Err(host.err(
@@ -1088,13 +1085,11 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
             ext: TrustLineEntryExt::V0,
         };
 
-        let tl_ledger_entry = storage::to_lazy_entry(
-            &LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::Trustline(trustline_entry),
-                ext: LedgerEntryExt::V0,
-            },
-        )?;
+        let tl_ledger_entry = storage::to_lazy_entry(&LedgerEntry {
+            last_modified_ledger_seq: 0,
+            data: LedgerEntryData::Trustline(trustline_entry),
+            ext: LedgerEntryExt::V0,
+        })?;
 
         // Increment account's num_sub_entries
         ae.num_sub_entries += 1;

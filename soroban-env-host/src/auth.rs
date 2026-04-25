@@ -858,7 +858,8 @@ impl AuthorizationManager {
     ) -> Result<(), HostError> {
         let auth_entries = {
             let elems = host.scvec_from_obj(auth_entries)?;
-            elems.into_iter()
+            elems
+                .into_iter()
                 .map(|scval| host.to_host_val(&scval))
                 .collect::<Result<Vec<Val>, _>>()?
         };
@@ -1973,7 +1974,9 @@ impl AccountAuthorizationTracker {
                 address: if !self.is_transaction_source_account {
                     Some({
                         let lazy = host.get_lazy_obj(self.address)?;
-                        let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+                        let la = lazy.as_address().ok_or_else(|| {
+                            HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+                        })?;
                         ScAddress::try_from(&la)?
                     })
                 } else {

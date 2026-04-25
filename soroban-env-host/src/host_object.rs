@@ -5,14 +5,14 @@ use crate::{
     host::metered_clone,
     num::{I256, U256},
     xdr::{
-        self, ContractCostType, LazyScVal, ScErrorCode, ScErrorType, ScMapEntry, ScVal, ScVec,
-        ScMap, SCSYMBOL_LIMIT,
+        self, ContractCostType, LazyScMap, LazyScMapEntry, LazyScVal, LazyScVec, ScErrorCode,
+        ScErrorType, ScMap, ScMapEntry, ScVal, ScValType, ScVec, SCSYMBOL_LIMIT,
     },
     AddressObject, BytesObject, Compare, DurationObject, DurationSmall, Host, HostError,
     I128Object, I128Small, I256Object, I256Small, I64Object, I64Small, MapObject,
     MuxedAddressObject, Object, StringObject, SymbolObject, SymbolSmall, SymbolStr,
-    TimepointObject, TimepointSmall, U128Object, U128Small, U256Object, U256Small,
-    U64Object, U64Small, Val, VecObject,
+    TimepointObject, TimepointSmall, U128Object, U128Small, U256Object, U256Small, U64Object,
+    U64Small, Val, VecObject,
 };
 
 use core::cmp::Ordering;
@@ -24,9 +24,8 @@ pub(crate) struct MuxedScAddress(pub(crate) xdr::ScAddress);
 
 /// Convert any typed object wrapper to an untyped Object handle.
 pub(crate) fn to_object(v: &impl AsRef<Val>) -> Result<Object, HostError> {
-    Object::try_from(*v.as_ref()).map_err(|_| {
-        HostError::from((ScErrorType::Object, ScErrorCode::InternalError))
-    })
+    Object::try_from(*v.as_ref())
+        .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))
 }
 
 // ---------------------------------------------------------------------------
@@ -198,14 +197,13 @@ impl Host {
     /// Deserialize a lazy object to ScVal.
     pub(crate) fn deserialize_obj(&self, obj: impl AsRef<Val>) -> Result<ScVal, HostError> {
         let lazy = self.get_lazy_obj(obj)?;
-        ScVal::try_from(&lazy).map_err(|_| {
-            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-        })
+        ScVal::try_from(&lazy)
+            .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))
     }
 
     /// Add a LazyScVal to the object table, returning a correctly-tagged Object.
     pub(crate) fn add_lazy_obj(&self, lazy: LazyScVal) -> Result<Object, HostError> {
-        let _span = tracy_span!("add lazy obj");
+        // let _span = tracy_span!("add lazy obj");
         let tag = tag_from_scval_type(lazy.discriminant()).ok_or_else(|| {
             self.err(
                 ScErrorType::Value,
@@ -223,9 +221,8 @@ impl Host {
 
     /// Add an object from a concrete ScVal by serializing to LazyScVal.
     pub(crate) fn add_obj_from_scval(&self, scval: ScVal) -> Result<Object, HostError> {
-        let lazy = LazyScVal::try_from(&scval).map_err(|_| {
-            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-        })?;
+        let lazy = LazyScVal::try_from(&scval)
+            .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
         self.add_lazy_obj(lazy)
     }
 
@@ -241,7 +238,10 @@ impl Host {
         Ok(unsafe { I64Object::from_handle(obj.get_handle()) })
     }
 
-    pub(crate) fn add_obj_timepoint(&self, v: xdr::TimePoint) -> Result<TimepointObject, HostError> {
+    pub(crate) fn add_obj_timepoint(
+        &self,
+        v: xdr::TimePoint,
+    ) -> Result<TimepointObject, HostError> {
         let obj = self.add_obj_from_scval(ScVal::Timepoint(v))?;
         Ok(unsafe { TimepointObject::from_handle(obj.get_handle()) })
     }
@@ -271,7 +271,10 @@ impl Host {
         use crate::num::u256_into_pieces;
         let (hi_hi, hi_lo, lo_hi, lo_lo) = u256_into_pieces(v);
         let obj = self.add_obj_from_scval(ScVal::U256(xdr::UInt256Parts {
-            hi_hi, hi_lo, lo_hi, lo_lo,
+            hi_hi,
+            hi_lo,
+            lo_hi,
+            lo_lo,
         }))?;
         Ok(unsafe { U256Object::from_handle(obj.get_handle()) })
     }
@@ -280,32 +283,50 @@ impl Host {
         use crate::num::i256_into_pieces;
         let (hi_hi, hi_lo, lo_hi, lo_lo) = i256_into_pieces(v);
         let obj = self.add_obj_from_scval(ScVal::I256(xdr::Int256Parts {
-            hi_hi, hi_lo, lo_hi, lo_lo,
+            hi_hi,
+            hi_lo,
+            lo_hi,
+            lo_lo,
         }))?;
         Ok(unsafe { I256Object::from_handle(obj.get_handle()) })
     }
 
     pub(crate) fn add_obj_bytes(&self, v: xdr::ScBytes) -> Result<BytesObject, HostError> {
-        let obj = self.add_obj_from_scval(ScVal::Bytes(v))?;
+        let obj = self.add_lazy_obj(Self::lazy_scval_with_opaque_body(
+            ScValType::Bytes,
+            v.0.as_ref(),
+        ))?;
         Ok(unsafe { BytesObject::from_handle(obj.get_handle()) })
     }
 
     pub(crate) fn add_obj_string(&self, v: xdr::ScString) -> Result<StringObject, HostError> {
-        let obj = self.add_obj_from_scval(ScVal::String(v))?;
+        let obj = self.add_lazy_obj(Self::lazy_scval_with_opaque_body(
+            ScValType::String,
+            v.0.as_ref(),
+        ))?;
         Ok(unsafe { StringObject::from_handle(obj.get_handle()) })
     }
 
     pub(crate) fn add_obj_symbol(&self, v: xdr::ScSymbol) -> Result<SymbolObject, HostError> {
-        let obj = self.add_obj_from_scval(ScVal::Symbol(v))?;
+        let obj = self.add_lazy_obj(Self::lazy_scval_with_opaque_body(
+            ScValType::Symbol,
+            v.0.as_ref(),
+        ))?;
         Ok(unsafe { SymbolObject::from_handle(obj.get_handle()) })
     }
 
     pub(crate) fn add_obj_address(&self, v: xdr::ScAddress) -> Result<AddressObject, HostError> {
-        let obj = self.add_obj_from_scval(ScVal::Address(v))?;
+        let obj = match Self::lazy_scval_from_address(&v) {
+            Some(lazy) => self.add_lazy_obj(lazy)?,
+            None => self.add_obj_from_scval(ScVal::Address(v))?,
+        };
         Ok(unsafe { AddressObject::from_handle(obj.get_handle()) })
     }
 
-    pub(crate) fn add_obj_muxed_address(&self, v: xdr::ScAddress) -> Result<MuxedAddressObject, HostError> {
+    pub(crate) fn add_obj_muxed_address(
+        &self,
+        v: xdr::ScAddress,
+    ) -> Result<MuxedAddressObject, HostError> {
         let obj = self.add_obj_from_scval(ScVal::Address(v))?;
         Ok(unsafe { MuxedAddressObject::from_handle(obj.get_handle()) })
     }
@@ -320,8 +341,115 @@ impl Host {
         Ok(unsafe { MapObject::from_handle(obj.get_handle()) })
     }
 
+    fn host_object_lazy_scval_from_validated_bytes(bytes: &[u8]) -> LazyScVal {
+        LazyScVal::from(xdr::LazyHandle::from_slice(bytes))
+    }
+
+    fn extend_xdr_i32(bytes: &mut std::vec::Vec<u8>, v: i32) {
+        bytes.extend_from_slice(&v.to_be_bytes());
+    }
+
+    fn extend_xdr_u32(bytes: &mut std::vec::Vec<u8>, v: u32) {
+        bytes.extend_from_slice(&v.to_be_bytes());
+    }
+
+    fn lazy_scval_with_opaque_body(ty: ScValType, body: &[u8]) -> LazyScVal {
+        let padded_len = (body.len() + 3) & !3;
+        let mut bytes = std::vec::Vec::with_capacity(8 + padded_len);
+        Self::extend_xdr_i32(&mut bytes, ty as i32);
+        Self::extend_xdr_u32(&mut bytes, body.len() as u32);
+        bytes.extend_from_slice(body);
+        bytes.resize(8 + padded_len, 0);
+        Self::host_object_lazy_scval_from_validated_bytes(&bytes)
+    }
+
+    fn lazy_scval_from_address(addr: &xdr::ScAddress) -> Option<LazyScVal> {
+        let mut bytes = std::vec::Vec::with_capacity(44);
+        Self::extend_xdr_i32(&mut bytes, ScValType::Address as i32);
+        match addr {
+            xdr::ScAddress::Account(xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
+                xdr::Uint256(ed25519),
+            ))) => {
+                Self::extend_xdr_i32(&mut bytes, xdr::ScAddressType::Account as i32);
+                Self::extend_xdr_i32(&mut bytes, xdr::PublicKeyType::PublicKeyTypeEd25519 as i32);
+                bytes.extend_from_slice(ed25519);
+            }
+            xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(contract))) => {
+                Self::extend_xdr_i32(&mut bytes, xdr::ScAddressType::Contract as i32);
+                bytes.extend_from_slice(contract);
+            }
+            _ => return None,
+        }
+        Some(Self::host_object_lazy_scval_from_validated_bytes(&bytes))
+    }
+
+    fn lazy_scval_with_container(
+        ty: ScValType,
+        container: impl AsRef<xdr::LazyHandle>,
+    ) -> LazyScVal {
+        let container = container.as_ref().as_slice();
+        let mut bytes = std::vec::Vec::with_capacity(8 + container.len());
+        Self::extend_xdr_i32(&mut bytes, ty as i32);
+        Self::extend_xdr_u32(&mut bytes, 1);
+        bytes.extend_from_slice(container);
+        Self::host_object_lazy_scval_from_validated_bytes(&bytes)
+    }
+
+    pub(crate) fn add_lazy_vec(&self, v: LazyScVec) -> Result<VecObject, HostError> {
+        let obj = self.add_lazy_obj(Self::lazy_scval_with_container(ScValType::Vec, v))?;
+        Ok(unsafe { VecObject::from_handle(obj.get_handle()) })
+    }
+
+    pub(crate) fn add_lazy_map(&self, m: LazyScMap) -> Result<MapObject, HostError> {
+        let obj = self.add_lazy_obj(Self::lazy_scval_with_container(ScValType::Map, m))?;
+        Ok(unsafe { MapObject::from_handle(obj.get_handle()) })
+    }
+
+    pub(crate) fn empty_lazy_vec() -> Result<LazyScVec, HostError> {
+        Ok(LazyScVec::from(xdr::LazyHandle::from_slice(&[
+            0u8, 0, 0, 0,
+        ])))
+    }
+
+    pub(crate) fn empty_lazy_map() -> Result<LazyScMap, HostError> {
+        Ok(LazyScMap::from(xdr::LazyHandle::from_slice(&[
+            0u8, 0, 0, 0,
+        ])))
+    }
+
+    pub(crate) fn lazy_vec_from_obj(&self, obj: VecObject) -> Result<LazyScVec, HostError> {
+        let lazy = self.get_lazy_obj(obj)?;
+        let lv = lazy
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        lv.get().map_or_else(Self::empty_lazy_vec, Ok)
+    }
+
+    pub(crate) fn lazy_map_from_obj(&self, obj: MapObject) -> Result<LazyScMap, HostError> {
+        let lazy = self.get_lazy_obj(obj)?;
+        let lm = lazy
+            .as_map()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        lm.get().map_or_else(Self::empty_lazy_map, Ok)
+    }
+
+    pub(crate) fn lazy_scmap_entry(
+        key: &LazyScVal,
+        val: &LazyScVal,
+    ) -> Result<LazyScMapEntry, HostError> {
+        let key = key.as_ref().as_slice();
+        let val = val.as_ref().as_slice();
+        let mut bytes = std::vec::Vec::with_capacity(key.len() + val.len());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(val);
+        Ok(LazyScMapEntry::from(xdr::LazyHandle::from_slice(&bytes)))
+    }
+
     /// Validate symbol bytes and add as symbol object.
-    pub(crate) fn add_obj_symbol_from_bytes(&self, bytes: Vec<u8>) -> Result<SymbolObject, HostError> {
+    pub(crate) fn add_obj_symbol_from_bytes(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<SymbolObject, HostError> {
         if bytes.len() as u64 > SCSYMBOL_LIMIT {
             return Err(self.err(
                 ScErrorType::Value,
@@ -354,23 +482,36 @@ impl Host {
         match scval {
             ScVal::Vec(Some(sv)) => Ok(sv.to_vec()),
             ScVal::Vec(None) => Ok(std::vec::Vec::new()),
-            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+            _ => Err(HostError::from((
+                ScErrorType::Object,
+                ScErrorCode::UnexpectedType,
+            ))),
         }
     }
 
     /// Deserialize a MapObject to a Vec<ScMapEntry>.
-    pub(crate) fn scmap_from_obj(&self, obj: MapObject) -> Result<std::vec::Vec<ScMapEntry>, HostError> {
+    pub(crate) fn scmap_from_obj(
+        &self,
+        obj: MapObject,
+    ) -> Result<std::vec::Vec<ScMapEntry>, HostError> {
         let scval = self.deserialize_obj(to_object(&obj)?)?;
         match scval {
             ScVal::Map(Some(sm)) => Ok(sm.to_vec()),
             ScVal::Map(None) => Ok(std::vec::Vec::new()),
-            _ => Err(HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))),
+            _ => Err(HostError::from((
+                ScErrorType::Object,
+                ScErrorCode::UnexpectedType,
+            ))),
         }
     }
 
     /// Binary search for a key in sorted ScMap entries. Returns Ok(idx) if found,
     /// Err(idx) for insertion point.
-    pub(crate) fn scmap_find(&self, entries: &[ScMapEntry], key: &ScVal) -> Result<Result<usize, usize>, HostError> {
+    pub(crate) fn scmap_find(
+        &self,
+        entries: &[ScMapEntry],
+        key: &ScVal,
+    ) -> Result<Result<usize, usize>, HostError> {
         let mut lo = 0usize;
         let mut hi = entries.len();
         while lo < hi {
@@ -385,7 +526,7 @@ impl Host {
         Ok(Err(lo))
     }
 
-    /// Lazy binary search on a LazyScMap. Compares keys using `Compare<LazyScVal>`
+    /// Lazy linear search on a LazyScMap. Compares keys using `Compare<LazyScVal>`
     /// which works directly on serialized XDR bytes without deserialization.
     /// Returns Ok(idx) if found, Err(idx) for insertion point.
     pub(crate) fn lazy_scmap_find(
@@ -393,23 +534,16 @@ impl Host {
         map: &xdr::LazyScMap,
         key: &LazyScVal,
     ) -> Result<Result<usize, usize>, HostError> {
-        let count = map.element_count() as usize;
-        let mut lo = 0usize;
-        let mut hi = count;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let entry = map.get(mid as u32).ok_or_else(|| {
-                HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds))
-            })?;
+        for (idx, entry) in map.iter().enumerate() {
             let entry_key = entry.key();
             let cmp: Ordering = self.compare(&entry_key, key)?;
             match cmp {
-                Ordering::Less => lo = mid + 1,
-                Ordering::Greater => hi = mid,
-                Ordering::Equal => return Ok(Ok(mid)),
+                Ordering::Less => (),
+                Ordering::Greater => return Ok(Err(idx)),
+                Ordering::Equal => return Ok(Ok(idx)),
             }
         }
-        Ok(Err(lo))
+        Ok(Err(map.element_count() as usize))
     }
 
     // ----- Comparison support for lazy objects -----
@@ -425,60 +559,96 @@ impl Host {
         use xdr::ScValType;
         let res = match lazy.discriminant() {
             ScValType::U64 => {
-                let Ok(small) = U64Small::try_from(rv) else { return Ok(None) };
-                let u = lazy.as_u64().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = U64Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let u = lazy.as_u64().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let small: u64 = small.into();
                 Some(budget.compare(&u, &small)?)
             }
             ScValType::I64 => {
-                let Ok(small) = I64Small::try_from(rv) else { return Ok(None) };
-                let i = lazy.as_i64().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = I64Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let i = lazy.as_i64().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let small: i64 = small.into();
                 Some(budget.compare(&i, &small)?)
             }
             ScValType::Timepoint => {
-                let Ok(small) = TimepointSmall::try_from(rv) else { return Ok(None) };
-                let tp = lazy.as_timepoint().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = TimepointSmall::try_from(rv) else {
+                    return Ok(None);
+                };
+                let tp = lazy.as_timepoint().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let small: u64 = small.into();
                 Some(budget.compare(&*tp, &small)?)
             }
             ScValType::Duration => {
-                let Ok(small) = DurationSmall::try_from(rv) else { return Ok(None) };
-                let d = lazy.as_duration().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = DurationSmall::try_from(rv) else {
+                    return Ok(None);
+                };
+                let d = lazy.as_duration().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let small: u64 = small.into();
                 Some(budget.compare(&*d, &small)?)
             }
             ScValType::U128 => {
-                let Ok(small) = U128Small::try_from(rv) else { return Ok(None) };
-                let u = lazy.as_u128().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = U128Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let u = lazy.as_u128().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let val = xdr::int128_helpers::u128_from_pieces(u.hi(), u.lo());
                 let small: u128 = small.into();
                 Some(budget.compare(&val, &small)?)
             }
             ScValType::I128 => {
-                let Ok(small) = I128Small::try_from(rv) else { return Ok(None) };
-                let i = lazy.as_i128().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = I128Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let i = lazy.as_i128().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let val = xdr::int128_helpers::i128_from_pieces(i.hi(), i.lo());
                 let small: i128 = small.into();
                 Some(budget.compare(&val, &small)?)
             }
             ScValType::U256 => {
-                let Ok(small) = U256Small::try_from(rv) else { return Ok(None) };
-                let u = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = U256Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let u = lazy.as_u256().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let val = crate::num::u256_from_pieces(u.hi_hi(), u.hi_lo(), u.lo_hi(), u.lo_lo());
                 let small: U256 = small.into();
                 Some(budget.compare(&val, &small)?)
             }
             ScValType::I256 => {
-                let Ok(small) = I256Small::try_from(rv) else { return Ok(None) };
-                let i = lazy.as_i256().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = I256Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let i = lazy.as_i256().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let val = crate::num::i256_from_pieces(i.hi_hi(), i.hi_lo(), i.lo_hi(), i.lo_lo());
                 let small: I256 = small.into();
                 Some(budget.compare(&val, &small)?)
             }
             ScValType::Symbol => {
-                let Ok(small) = SymbolSmall::try_from(rv) else { return Ok(None) };
-                let s = lazy.as_symbol().ok_or_else(|| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+                let Ok(small) = SymbolSmall::try_from(rv) else {
+                    return Ok(None);
+                };
+                let s = lazy.as_symbol().ok_or_else(|| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?;
                 let small_str: SymbolStr = small.into();
                 let rhs: &[u8] = small_str.as_ref();
                 Some(budget.compare(&s.as_bytes(), &rhs)?)

@@ -31,14 +31,14 @@ where
 
 impl Host {
     pub fn metered_hash_xdr(&self, obj: &impl WriteXdr) -> Result<[u8; 32], HostError> {
-        let _span = tracy_span!("hash xdr");
+        // let _span = tracy_span!("hash xdr");
         let mut buf = vec![];
         metered_write_xdr(self.budget_ref(), obj, &mut buf)?;
         sha256_hash_from_bytes_raw(&buf, self)
     }
 
     pub fn metered_from_xdr<T: ReadXdr>(&self, bytes: &[u8]) -> Result<T, HostError> {
-        let _span = tracy_span!("read xdr");
+        // let _span = tracy_span!("read xdr");
         self.charge_budget(ContractCostType::ValDeser, Some(bytes.len() as u64))?;
         let mut limits = DEFAULT_XDR_RW_LIMITS;
         limits.len = bytes.len();
@@ -50,7 +50,9 @@ impl Host {
         bytes: BytesObject,
     ) -> Result<T, HostError> {
         let lazy = self.get_lazy_obj(bytes)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.metered_from_xdr(lb.as_bytes())
     }
 }
@@ -60,7 +62,7 @@ pub fn metered_write_xdr(
     obj: &impl WriteXdr,
     w: &mut Vec<u8>,
 ) -> Result<(), HostError> {
-    let _span = tracy_span!("write xdr");
+    // let _span = tracy_span!("write xdr");
     let mut w = Limited::new(MeteredWrite { budget, w }, DEFAULT_XDR_RW_LIMITS);
     // MeteredWrite above turned any budget failure into an IO error; we turn it
     // back to a budget failure here, since there's really no "IO error" that can
@@ -76,7 +78,7 @@ pub fn metered_from_xdr_with_budget<T: ReadXdr>(
     bytes: &[u8],
     budget: &Budget,
 ) -> Result<T, HostError> {
-    let _span = tracy_span!("read xdr with budget");
+    // let _span = tracy_span!("read xdr with budget");
     budget.charge(ContractCostType::ValDeser, Some(bytes.len() as u64))?;
     let mut limits = DEFAULT_XDR_RW_LIMITS;
     limits.len = bytes.len();

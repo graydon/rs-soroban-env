@@ -8,9 +8,8 @@ use crate::{
     },
     storage::{InstanceStorageMap, StorageMap},
     xdr::{
-        ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgsV2, Hash,
-        HostFunction, HostFunctionType, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
-        ScVal,
+        ContractId, ContractIdPreimage, CreateContractArgsV2, Hash, HostFunction, HostFunctionType,
+        LazyScContractInstance, ScAddress, ScErrorCode, ScErrorType, ScVal,
     },
     AddressObject, Error, ErrorHandler, Host, HostError, Object, Symbol, SymbolStr, TryFromVal,
     TryIntoVal, Val, Vm, DEFAULT_HOST_DEPTH_LIMIT,
@@ -59,7 +58,7 @@ pub(crate) struct TestContractFrame {
     pub(crate) func: Symbol,
     pub(crate) args: Vec<Val>,
     pub(crate) panic: Rc<RefCell<Option<Error>>>,
-    pub(crate) instance: ScContractInstance,
+    pub(crate) instance: LazyScContractInstance,
 }
 
 #[cfg(any(test, feature = "testutils"))]
@@ -77,7 +76,27 @@ impl std::hash::Hash for TestContractFrame {
 
 #[cfg(any(test, feature = "testutils"))]
 impl TestContractFrame {
-    pub fn new(id: ContractId, func: Symbol, args: Vec<Val>, instance: ScContractInstance) -> Self {
+    pub fn new(
+        id: ContractId,
+        func: Symbol,
+        args: Vec<Val>,
+        instance: crate::xdr::ScContractInstance,
+    ) -> Self {
+        Self {
+            id,
+            func,
+            args,
+            panic: Rc::new(RefCell::new(None)),
+            instance: LazyScContractInstance::try_from(&instance).unwrap(),
+        }
+    }
+
+    pub fn new_from_lazy(
+        id: ContractId,
+        func: Symbol,
+        args: Vec<Val>,
+        instance: LazyScContractInstance,
+    ) -> Self {
         Self {
             id,
             func,
@@ -139,11 +158,11 @@ pub(crate) enum Frame {
         vm: Rc<Vm>,
         fn_name: Symbol,
         args: Vec<Val>,
-        instance: ScContractInstance,
+        instance: LazyScContractInstance,
         relative_objects: Vec<Object>,
     },
     HostFunction(HostFunctionType),
-    StellarAssetContract(ContractId, Symbol, Vec<Val>, ScContractInstance),
+    StellarAssetContract(ContractId, Symbol, Vec<Val>, LazyScContractInstance),
     #[cfg(any(test, feature = "testutils"))]
     TestContract(TestContractFrame),
 }
@@ -159,7 +178,7 @@ impl Frame {
         }
     }
 
-    fn instance(&self) -> Option<&ScContractInstance> {
+    fn instance(&self) -> Option<&LazyScContractInstance> {
         match self {
             Frame::ContractVM { instance, .. } => Some(instance),
             Frame::HostFunction(_) => None,
@@ -743,10 +762,12 @@ impl Host {
     ) -> Result<TestContractFrame, HostError> {
         let instance_key = self.contract_instance_ledger_key(&id)?;
         let lazy_instance = self.retrieve_contract_instance_from_storage(&instance_key)?;
-        let instance = ScContractInstance::try_from(&lazy_instance).map_err(|_| {
-            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-        })?;
-        Ok(TestContractFrame::new(id, func, args.to_vec(), instance))
+        Ok(TestContractFrame::new_from_lazy(
+            id,
+            func,
+            args.to_vec(),
+            lazy_instance,
+        ))
     }
 
     // Notes on metering: this is covered by the called components.
@@ -764,12 +785,8 @@ impl Host {
         Vec::<Val>::charge_bulk_init_cpy(args.len() as u64, self.as_budget())?;
         let args_vec = args.to_vec();
         if let Some(lazy_hash) = lazy_exec.as_wasm() {
-            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })?;
-            let instance = ScContractInstance::try_from(&lazy_instance).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })?;
+            let wasm_hash = Hash::try_from(&lazy_hash)
+                .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
             let vm = self.instantiate_vm(id, &wasm_hash)?;
             let relative_objects = Vec::new();
             self.with_frame(
@@ -777,17 +794,19 @@ impl Host {
                     vm: Rc::clone(&vm),
                     fn_name: *func,
                     args: args_vec,
-                    instance,
+                    instance: lazy_instance,
                     relative_objects,
                 },
                 || vm.invoke_function_raw(self, func, args, treat_missing_function_as_noop),
             )
         } else {
-            let instance = ScContractInstance::try_from(&lazy_instance).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })?;
             self.with_frame(
-                Frame::StellarAssetContract(id.metered_clone(self)?, *func, args_vec, instance),
+                Frame::StellarAssetContract(
+                    id.metered_clone(self)?,
+                    *func,
+                    args_vec,
+                    lazy_instance,
+                ),
                 || {
                     use crate::builtin_contracts::{BuiltinContract, StellarAssetContract};
                     StellarAssetContract.call(func, self, args)
@@ -925,9 +944,8 @@ impl Host {
             .retrieve_contract_instance_from_storage(&storage_key)?
             .executable();
         if let Some(lazy_hash) = lazy_exec.as_wasm() {
-            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })?;
+            let wasm_hash = Hash::try_from(&lazy_hash)
+                .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
             let vm = self.instantiate_vm(contract_id, &wasm_hash)?;
             Ok(vm.module.proto_version)
         } else {
@@ -1223,7 +1241,7 @@ impl Host {
                 &[],
             ));
         };
-        ctx.storage = Some(InstanceStorageMap::from_instance_xdr(instance, self)?);
+        ctx.storage = Some(InstanceStorageMap::from_lazy_instance(instance));
         Ok(())
     }
 
@@ -1238,10 +1256,7 @@ impl Host {
         };
         let instance_key = self.contract_instance_ledger_key(&contract_id)?;
         let lazy_instance = self.retrieve_contract_instance_from_storage(&instance_key)?;
-        let instance = ScContractInstance::try_from(&lazy_instance).map_err(|_| {
-            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-        })?;
-        ctx.storage = Some(InstanceStorageMap::from_instance_xdr(&instance, self)?);
+        ctx.storage = Some(InstanceStorageMap::from_lazy_instance(&lazy_instance));
         Ok(())
     }
 
@@ -1280,7 +1295,7 @@ impl Host {
                 if !storage.is_modified {
                     return Ok(None);
                 }
-                Ok(Some(self.instance_storage_map_to_scmap(&storage.map)?))
+                Ok(Some(storage.to_scmap(self)?))
             } else {
                 Ok(None)
             }

@@ -7,18 +7,20 @@
 //!   - [Env::put_contract_data](crate::Env::put_contract_data)
 //!   - [Env::del_contract_data](crate::Env::del_contract_data)
 
+#[cfg(any(test, feature = "recording_mode"))]
 use std::rc::Rc;
 
 use crate::budget::AsBudget;
-use crate::host::metered_clone::{MeteredClone, MeteredIterator};
+use crate::host::metered_clone::MeteredClone;
 use crate::{
     budget::Budget,
-    host::metered_map::MeteredOrdMap,
+    host::metered_map::{FastStorageMap, MeteredOrdMap},
     xdr::{
-        ContractDataDurability, LazyLedgerEntry, LazyLedgerKey, LedgerEntry, LedgerEntryType,
-        LedgerKey, ScContractInstance, ScErrorCode, ScErrorType, ScVal,
+        ContractDataDurability, LazyLedgerEntry, LazyLedgerKey, LazyOption, LazyScContractInstance,
+        LazyScMap, LazyScMapEntry, LazyScVal, LedgerEntry, LedgerKey, ScErrorCode, ScErrorType,
+        ScMap, ScVal,
     },
-    Env, Error, Host, HostError, Val,
+    Env, Error, ErrorHandler, Host, HostError, Val,
 };
 
 pub type FootprintMap = MeteredOrdMap<LazyLedgerKey, AccessType, Budget>;
@@ -60,38 +62,110 @@ pub fn from_lazy_entry(entry: &LazyLedgerEntry) -> Result<LedgerEntry, HostError
 /// contract data entry.
 #[derive(Clone, Hash)]
 pub(crate) struct InstanceStorageMap {
-    pub(crate) map: MeteredOrdMap<Val, Val, Host>,
+    storage: LazyOption<LazyScMap>,
+    modified: Option<LazyScMap>,
     pub(crate) is_modified: bool,
 }
 
 impl InstanceStorageMap {
-    pub(crate) fn from_map(map: Vec<(Val, Val)>, host: &Host) -> Result<Self, HostError> {
-        Ok(Self {
-            map: MeteredOrdMap::from_map(map, host)?,
+    pub(crate) fn from_lazy_instance(instance: &LazyScContractInstance) -> Self {
+        Self {
+            storage: instance.storage(),
+            modified: None,
             is_modified: false,
-        })
+        }
     }
 
-    pub(crate) fn from_instance_xdr(
-        instance: &ScContractInstance,
+    fn current_map(&self) -> Option<LazyScMap> {
+        self.modified.clone().or_else(|| self.storage.get())
+    }
+
+    fn empty_map() -> Result<LazyScMap, HostError> {
+        LazyScMap::try_from(std::sync::Arc::<[u8]>::from([0u8, 0, 0, 0]))
+            .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))
+    }
+
+    fn map_entry(key: &LazyScVal, val: &LazyScVal) -> Result<LazyScMapEntry, HostError> {
+        let key = key.as_ref().as_slice();
+        let val = val.as_ref().as_slice();
+        let mut bytes = Vec::with_capacity(key.len() + val.len());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(val);
+        LazyScMapEntry::try_from(std::sync::Arc::<[u8]>::from(bytes))
+            .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))
+    }
+
+    pub(crate) fn get(&self, key: &LazyScVal, host: &Host) -> Result<Option<LazyScVal>, HostError> {
+        let Some(storage) = self.current_map() else {
+            return Ok(None);
+        };
+        match host.lazy_scmap_find(&storage, key)? {
+            Ok(idx) => {
+                let entry = storage.get(idx as u32).ok_or_else(|| {
+                    HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds))
+                })?;
+                Ok(Some(entry.val()))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    pub(crate) fn contains_key(&self, key: &LazyScVal, host: &Host) -> Result<bool, HostError> {
+        let Some(storage) = self.current_map() else {
+            return Ok(false);
+        };
+        Ok(host.lazy_scmap_find(&storage, key)?.is_ok())
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.modified
+            .as_ref()
+            .map(|map| map.element_count() as usize)
+            .or_else(|| {
+                self.storage
+                    .get()
+                    .map(|storage| storage.element_count() as usize)
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn insert(
+        &mut self,
+        key: LazyScVal,
+        value: LazyScVal,
         host: &Host,
-    ) -> Result<Self, HostError> {
-        Self::from_map(
-            instance.storage.as_ref().map_or_else(
-                || Ok(vec![]),
-                |m| {
-                    m.iter()
-                        .map(|i| {
-                            Ok((
-                                host.to_valid_host_val(&i.key)?,
-                                host.to_valid_host_val(&i.val)?,
-                            ))
-                        })
-                        .metered_collect::<Result<Vec<(Val, Val)>, HostError>>(host)?
-                },
-            )?,
-            host,
-        )
+    ) -> Result<(), HostError> {
+        let map = self.current_map().map_or_else(Self::empty_map, Ok)?;
+        let entry = Self::map_entry(&key, &value)?;
+        let edited = match host.lazy_scmap_find(&map, &key)? {
+            Ok(idx) => map.replace_element(idx as u32, &entry),
+            Err(idx) => map.insert_element(idx as u32, &entry),
+        }
+        .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+        self.modified = Some(LazyScMap::from(edited.as_ref().clone()));
+        Ok(())
+    }
+
+    pub(crate) fn remove(&mut self, key: &LazyScVal, host: &Host) -> Result<(), HostError> {
+        let Some(map) = self.current_map() else {
+            return Ok(());
+        };
+        let Ok(idx) = host.lazy_scmap_find(&map, key)? else {
+            return Ok(());
+        };
+        let edited = map
+            .remove_element(idx as u32)
+            .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
+        self.modified = Some(LazyScMap::from(edited.as_ref().clone()));
+        Ok(())
+    }
+
+    pub(crate) fn to_scmap(&self, host: &Host) -> Result<ScMap, HostError> {
+        match self.current_map() {
+            Some(storage) => ScMap::try_from(&storage)
+                .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError))),
+            None => Ok(ScMap(host.map_err(Vec::new().try_into())?)),
+        }
     }
 }
 
@@ -243,9 +317,7 @@ impl Storage {
     }
 
     /// Lazy version of check_supported_ledger_entry_type using discriminant.
-    pub fn check_supported_lazy_ledger_entry_type(
-        le: &LazyLedgerEntry,
-    ) -> Result<(), HostError> {
+    pub fn check_supported_lazy_ledger_entry_type(le: &LazyLedgerEntry) -> Result<(), HostError> {
         use crate::xdr::LedgerEntryType;
         match le.data().discriminant() {
             LedgerEntryType::Account
@@ -271,9 +343,7 @@ impl Storage {
     }
 
     /// Lazy version of check_supported_ledger_key_type using discriminant.
-    pub fn check_supported_lazy_ledger_key_type(
-        lk: &LazyLedgerKey,
-    ) -> Result<(), HostError> {
+    pub fn check_supported_lazy_ledger_key_type(lk: &LazyLedgerKey) -> Result<(), HostError> {
         use crate::xdr::LedgerEntryType;
         match lk.discriminant() {
             LedgerEntryType::Account
@@ -312,10 +382,10 @@ impl Storage {
         key: &LazyLedgerKey,
         host: &Host,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        let _span = tracy_span!("storage get");
+        // let _span = tracy_span!("storage get");
         Self::check_supported_lazy_ledger_key_type(key)?;
         self.prepare_read_only_access(key, host)?;
-        match self.map.get::<LazyLedgerKey>(key, host.budget_ref())? {
+        match self.map.get_fast(key, host.budget_ref())? {
             // Key has to be in the storage map at this point due to
             // `prepare_read_only_access`.
             None => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
@@ -410,7 +480,7 @@ impl Storage {
                 self.footprint.enforce_access(key, ty, host.budget_ref())?;
             }
         };
-        self.map = self.map.insert(key.clone(), val, host.budget_ref())?;
+        self.map = self.map.insert_fast(key.clone(), val, host.budget_ref())?;
         Ok(())
     }
 
@@ -442,7 +512,7 @@ impl Storage {
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
-        let _span = tracy_span!("storage put");
+        // let _span = tracy_span!("storage put");
         self.put_opt(key, Some((val.clone(), live_until_ledger)), host, key_val)
     }
 
@@ -461,7 +531,7 @@ impl Storage {
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
-        let _span = tracy_span!("storage del");
+        // let _span = tracy_span!("storage del");
         self.put_opt(key, None, host, key_val)
             .map_err(|e| host.decorate_lazy_storage_error(e, key, key_val))
     }
@@ -481,7 +551,7 @@ impl Storage {
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<bool, HostError> {
-        let _span = tracy_span!("storage has");
+        // let _span = tracy_span!("storage has");
         Ok(self.try_get_full(key, host, key_val)?.is_some())
     }
 
@@ -563,7 +633,7 @@ impl Storage {
         new_live_until: u32,
     ) -> Result<(), HostError> {
         if new_live_until > ttl_ext_info.old_live_until {
-            self.map = self.map.insert(
+            self.map = self.map.insert_fast(
                 key,
                 Some((ttl_ext_info.entry, Some(new_live_until))),
                 host.budget_ref(),
@@ -594,7 +664,7 @@ impl Storage {
         extend_to: u32,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
-        let _span = tracy_span!("extend key");
+        // let _span = tracy_span!("extend key");
 
         if threshold > extend_to {
             return Err(host.err(
@@ -657,7 +727,7 @@ impl Storage {
         max_extension: u32,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
-        let _span = tracy_span!("extend key v2");
+        // let _span = tracy_span!("extend key v2");
 
         if max_extension < min_extension {
             return Err(host.err(
@@ -764,7 +834,9 @@ impl Storage {
                     .contains_key::<LazyLedgerKey>(key, host.budget_ref())?
                 {
                     let value = src.get(&key)?;
-                    self.map = self.map.insert(key.clone(), value, host.budget_ref())?;
+                    self.map = self
+                        .map
+                        .insert_fast(key.clone(), value, host.budget_ref())?;
                 }
                 self.footprint.record_access(key, ty, host.budget_ref())?;
                 self.handle_maybe_expired_entry(key, host)?;
@@ -784,9 +856,7 @@ impl Storage {
     ) -> Result<(), HostError> {
         host.with_ledger_info(|li| {
             let budget = host.budget_ref();
-            if let Some(Some((entry, live_until))) =
-                self.map.get::<LazyLedgerKey>(key, host.budget_ref())?
-            {
+            if let Some(Some((entry, live_until))) = self.map.get_fast(key, host.budget_ref())? {
                 if let Some(durability) = crate::ledger_info::get_lazy_key_durability(key) {
                     let live_until = live_until.ok_or_else(|| {
                         host.err(
@@ -799,7 +869,7 @@ impl Storage {
                     if live_until < li.sequence_number {
                         match durability {
                             ContractDataDurability::Temporary => {
-                                self.map = self.map.insert(key.clone(), None, budget)?;
+                                self.map = self.map.insert_fast(key.clone(), None, budget)?;
                             }
                             ContractDataDurability::Persistent => {
                                 self.footprint
@@ -814,7 +884,7 @@ impl Storage {
                                         "persistent entry TTL overflow, ledger is mis-configured",
                                         &[],)
                                     })?;
-                                self.map = self.map.insert(
+                                self.map = self.map.insert_fast(
                                     key.clone(),
                                     Some((entry.clone(), Some(new_live_until))),
                                     budget,
@@ -936,10 +1006,7 @@ impl Host {
             }
             LedgerKey::ContractCode(c) => {
                 if can_create_new_objects {
-                    res.push(
-                        self.add_obj_bytes(self.scbytes_from_hash(&c.hash)?)?
-                            .into(),
-                    );
+                    res.push(self.add_obj_bytes(self.scbytes_from_hash(&c.hash)?)?.into());
                 }
             }
             LedgerKey::Account(_) | LedgerKey::Trustline(_) => {

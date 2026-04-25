@@ -1,9 +1,6 @@
 use crate::{
     crypto, err,
-    host::{
-        metered_clone::MeteredClone,
-        metered_write_xdr, ContractReentryMode,
-    },
+    host::{metered_clone::MeteredClone, metered_write_xdr, ContractReentryMode},
     storage,
     vm::Vm,
     xdr::{
@@ -219,7 +216,9 @@ impl Host {
         let contract_id_preimage = ContractIdPreimage::Address(ContractIdPreimageFromAddress {
             address: {
                 let lazy = self.get_lazy_obj(deployer)?;
-                let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+                let la = lazy.as_address().ok_or_else(|| {
+                    HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+                })?;
                 ScAddress::try_from(&la)?
             },
             salt: self.u256_from_bytesobj_input("contract_id_salt", salt)?,
@@ -309,9 +308,12 @@ impl Host {
             if let Some(lazy_code) = data.as_contract_code() {
                 let lazy_ext = lazy_code.ext();
                 // Deserialize just the ext sub-region to compare
-                let old_ext = crate::xdr::ContractCodeEntryExt::try_from(&lazy_ext)
-                    .map_err(|_| {
-                        HostError::from((crate::xdr::ScErrorType::Storage, crate::xdr::ScErrorCode::InternalError))
+                let old_ext =
+                    crate::xdr::ContractCodeEntryExt::try_from(&lazy_ext).map_err(|_| {
+                        HostError::from((
+                            crate::xdr::ScErrorType::Storage,
+                            crate::xdr::ScErrorCode::InternalError,
+                        ))
                     })?;
                 should_put_contract = old_ext != ext;
             }

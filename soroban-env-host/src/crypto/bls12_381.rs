@@ -188,7 +188,9 @@ impl Host {
     ) -> Result<Affine<P>, HostError> {
         let pt: Affine<P> = {
             let lazy = self.get_lazy_obj(bo)?;
-            let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let lb = lazy.as_bytes().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             let src = lb.as_bytes();
             self.validate_point_encoding::<EXPECTED_SIZE>(src, tag)?;
             self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(src, tag)
@@ -333,7 +335,9 @@ impl Host {
         tag: &str,
     ) -> Result<T, HostError> {
         let lazy = self.get_lazy_obj(bo)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let src = lb.as_bytes();
         if src.len() != EXPECTED_SIZE {
             return Err(self.err(

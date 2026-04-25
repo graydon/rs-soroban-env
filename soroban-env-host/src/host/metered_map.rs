@@ -23,7 +23,92 @@ pub struct MeteredOrdMap<K, V, Ctx> {
     // https://doc.rust-lang.org/nomicon/phantom-data.html#table-of-phantomdata-patterns
     // for discussion of the ways you can use PhantomData to precisely model
     // various sorts of constraints.
-    ctx: PhantomData<fn(Ctx)>,
+    pub(crate) ctx: PhantomData<fn(Ctx)>,
+}
+
+pub(crate) trait FastStorageKey {
+    fn fast_storage_key_bytes(&self) -> &[u8];
+}
+
+impl FastStorageKey for crate::xdr::LazyLedgerKey {
+    fn fast_storage_key_bytes(&self) -> &[u8] {
+        self.as_ref().as_slice()
+    }
+}
+
+impl FastStorageKey for crate::xdr::LazyScVal {
+    fn fast_storage_key_bytes(&self) -> &[u8] {
+        self.as_ref().as_slice()
+    }
+}
+
+pub(crate) trait FastStorageMap<K, V, Ctx> {
+    fn get_fast(&self, key: &K, ctx: &Ctx) -> Result<Option<&V>, HostError>;
+    fn insert_fast(
+        &self,
+        key: K,
+        value: V,
+        ctx: &Ctx,
+    ) -> Result<MeteredOrdMap<K, V, Ctx>, HostError>;
+    fn remove_fast(
+        &self,
+        key: &K,
+        ctx: &Ctx,
+    ) -> Result<Option<(MeteredOrdMap<K, V, Ctx>, V)>, HostError>;
+}
+
+impl<K, V, Ctx> FastStorageMap<K, V, Ctx> for MeteredOrdMap<K, V, Ctx>
+where
+    K: FastStorageKey + MeteredClone,
+    V: MeteredClone,
+    Ctx: AsBudget + Compare<K, Error = HostError>,
+{
+    fn get_fast(&self, key: &K, ctx: &Ctx) -> Result<Option<&V>, HostError> {
+        let key_bytes = key.fast_storage_key_bytes();
+        for (k, v) in self.map.iter() {
+            if k.fast_storage_key_bytes() == key_bytes {
+                return Ok(Some(v));
+            }
+        }
+        self.get(key, ctx)
+    }
+
+    fn insert_fast(
+        &self,
+        key: K,
+        value: V,
+        ctx: &Ctx,
+    ) -> Result<MeteredOrdMap<K, V, Ctx>, HostError> {
+        let key_bytes = key.fast_storage_key_bytes();
+        for (i, (k, _)) in self.map.iter().enumerate() {
+            if k.fast_storage_key_bytes() == key_bytes {
+                let mut newmap = self.map.clone();
+                newmap[i].1 = value;
+                return Ok(Self {
+                    map: newmap,
+                    ctx: Default::default(),
+                });
+            }
+        }
+        self.insert(key, value, ctx)
+    }
+
+    fn remove_fast(
+        &self,
+        key: &K,
+        ctx: &Ctx,
+    ) -> Result<Option<(MeteredOrdMap<K, V, Ctx>, V)>, HostError> {
+        let key_bytes = key.fast_storage_key_bytes();
+        for (i, (k, v)) in self.map.iter().enumerate() {
+            if k.fast_storage_key_bytes() == key_bytes {
+                let init = self.map.iter().take(i).cloned();
+                let fini = self.map.iter().skip(i.saturating_add(1)).cloned();
+                let new = Self::from_exact_iter(init.chain(fini), ctx)?;
+                return Ok(Some((new, v.metered_clone(ctx.as_budget())?)));
+            }
+        }
+        self.remove(key, ctx)
+    }
 }
 
 /// `Clone` should not be used directly, used `MeteredClone` instead if
@@ -145,7 +230,7 @@ where
         iter: I,
         ctx: &Ctx,
     ) -> Result<Self, HostError> {
-        let _span = tracy_span!("new map");
+        // let _span = tracy_span!("new map");
         if let (_, Some(sz)) = iter.size_hint() {
             if u32::try_from(sz).is_err() {
                 Err(MAP_OOB.into())
@@ -165,12 +250,12 @@ where
         }
     }
 
-    fn find<Q>(&self, key: &Q, ctx: &Ctx) -> Result<Result<usize, usize>, HostError>
+    pub(crate) fn find<Q>(&self, key: &Q, ctx: &Ctx) -> Result<Result<usize, usize>, HostError>
     where
         K: Borrow<Q>,
         Ctx: Compare<Q, Error = HostError>,
     {
-        let _span = tracy_span!("map lookup");
+        // let _span = tracy_span!("map lookup");
         self.charge_binsearch(ctx)?;
         let mut err: Option<HostError> = None;
         let res = binary_search_by_pre_rust_182(self.map.as_slice(), |probe| {

@@ -5,7 +5,7 @@ use crate::{
     host_object::MuxedScAddress,
     xdr::{
         ContractId, Duration, Hash, MuxedEd25519Account, ScAddress, ScBytes, ScErrorCode,
-        ScErrorType, ScString, ScSymbol, ScVec, ScMap, ScMapEntry, ScVal, TimePoint, Uint256,
+        ScErrorType, ScMap, ScMapEntry, ScString, ScSymbol, ScVal, ScVec, TimePoint, Uint256,
     },
     AddressObject, Bool, BytesObject, ContractTtlExtension, DurationObject, DurationSmall,
     DurationVal, Env, Error, Host, HostError, I128Object, I128Small, I128Val, I256Object,
@@ -313,14 +313,18 @@ impl TestObject for SymbolObject {
 impl TestObject for VecObject {
     fn test_object(host: &Host) -> Self {
         let scval = host.from_host_val(Val::from_void().to_val()).unwrap();
-        host.add_obj_vec_scval(ScVec(vec![scval].try_into().unwrap())).unwrap()
+        host.add_obj_vec_scval(ScVec(vec![scval].try_into().unwrap()))
+            .unwrap()
     }
 }
 impl TestObject for MapObject {
     fn test_object(host: &Host) -> Self {
         let k = host.from_host_val(Val::from_void().to_val()).unwrap();
         let v = host.from_host_val(Val::from_void().to_val()).unwrap();
-        host.add_obj_map_scval(ScMap(vec![ScMapEntry { key: k, val: v }].try_into().unwrap())).unwrap()
+        host.add_obj_map_scval(ScMap(
+            vec![ScMapEntry { key: k, val: v }].try_into().unwrap(),
+        ))
+        .unwrap()
     }
 }
 impl TestObject for AddressObject {

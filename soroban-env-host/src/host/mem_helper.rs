@@ -1,8 +1,11 @@
 use crate::{
     budget::AsBudget,
     host::Frame,
-    xdr::{ContractCostType, ScBytes, ScErrorCode, ScErrorType, ScSymbol, ScVal, ScString, LazyScVal},
-    Compare, Host, HostError, Object, Symbol, SymbolObject, SymbolSmall, SymbolStr, U32Val, Vm, VmCaller,
+    xdr::{
+        ContractCostType, LazyScVal, ScBytes, ScErrorCode, ScErrorType, ScString, ScSymbol, ScVal,
+    },
+    Compare, Host, HostError, Object, Symbol, SymbolObject, SymbolSmall, SymbolStr, U32Val, Vm,
+    VmCaller,
 };
 
 use super::ErrorHandler;
@@ -285,13 +288,9 @@ impl Host {
     }
 
     // Extract owned byte vec from a bytes-like lazy object (ScBytes, ScString, ScSymbol).
-    fn lazy_obj_to_bytes(
-        &self,
-        lazy: &LazyScVal,
-    ) -> Result<Vec<u8>, HostError> {
-        let scval = ScVal::try_from(lazy).map_err(|_| {
-            HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-        })?;
+    fn lazy_obj_to_bytes(&self, lazy: &LazyScVal) -> Result<Vec<u8>, HostError> {
+        let scval = ScVal::try_from(lazy)
+            .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
         match scval {
             ScVal::Bytes(b) => Ok(b.to_vec()),
             ScVal::String(s) => Ok(s.to_vec()),
@@ -395,23 +394,26 @@ impl Host {
         copy_bytes_in(obj_buf)?;
         // Reconstruct same-typed ScVal
         use crate::Tag;
-        let scval = match tag {
-            Tag::BytesObject => ScVal::Bytes(ScBytes::try_from(obj_new).map_err(|_| {
-                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-            })?),
-            Tag::StringObject => ScVal::String(ScString::try_from(obj_new).map_err(|_| {
-                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-            })?),
-            Tag::SymbolObject => ScVal::Symbol(ScSymbol::try_from(obj_new).map_err(|_| {
-                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-            })?),
-            _ => return Err(self.err(
-                ScErrorType::Object,
-                ScErrorCode::UnexpectedType,
-                "expected bytes-like object for copy_from",
-                &[],
-            )),
-        };
+        let scval =
+            match tag {
+                Tag::BytesObject => ScVal::Bytes(ScBytes::try_from(obj_new).map_err(|_| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?),
+                Tag::StringObject => ScVal::String(ScString::try_from(obj_new).map_err(|_| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?),
+                Tag::SymbolObject => ScVal::Symbol(ScSymbol::try_from(obj_new).map_err(|_| {
+                    HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
+                })?),
+                _ => {
+                    return Err(self.err(
+                        ScErrorType::Object,
+                        ScErrorCode::UnexpectedType,
+                        "expected bytes-like object for copy_from",
+                        &[],
+                    ))
+                }
+            };
         Ok(self.add_obj_from_scval(scval)?.into())
     }
 

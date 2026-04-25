@@ -50,15 +50,18 @@ impl InvokerContractAuthEntry {
                     contract_address: contract_invocation.context.contract.as_object(),
                     function_name: contract_invocation.context.fn_name,
                     args: {
-                        let elems = host.scvec_from_obj(contract_invocation.context.args.as_object())?;
-                        elems.into_iter()
+                        let elems =
+                            host.scvec_from_obj(contract_invocation.context.args.as_object())?;
+                        elems
+                            .into_iter()
                             .map(|scval| host.to_host_val(&scval))
                             .collect::<Result<Vec<Val>, _>>()?
                     },
                 });
                 let mut sub_invocations: Vec<AuthorizedInvocation> = vec![];
                 {
-                    let elems = host.scvec_from_obj(contract_invocation.sub_invocations.as_object())?;
+                    let elems =
+                        host.scvec_from_obj(contract_invocation.sub_invocations.as_object())?;
                     Vec::<AuthorizedInvocation>::charge_bulk_init_cpy(
                         elems.len() as u64,
                         host.as_budget(),

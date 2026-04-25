@@ -611,6 +611,7 @@ impl MeteredClone for LedgerEntry {
 // No substructure to charge for — the backing buffer is shared.
 impl MeteredClone for crate::xdr::LazyLedgerKey {}
 impl MeteredClone for crate::xdr::LazyLedgerEntry {}
+impl MeteredClone for crate::xdr::LazyScVal {}
 impl MeteredClone for crate::xdr::LazyTtlEntry {}
 impl MeteredClone for crate::xdr::LazyHandle {}
 

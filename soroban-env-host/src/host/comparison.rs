@@ -45,16 +45,13 @@ impl Compare<LazyScVal> for Host {
     type Error = HostError;
 
     fn compare(&self, a: &LazyScVal, b: &LazyScVal) -> Result<Ordering, Self::Error> {
-        let _span = tracy_span!("Compare<LazyScVal>");
+        // let _span = tracy_span!("Compare<LazyScVal>");
         // Charge based on the shorter of the two serialized representations,
         // since comparison will terminate at the first difference or at the
         // end of the shorter value.
         let a_len = a.as_ref().len() as u64;
         let b_len = b.as_ref().len() as u64;
-        self.charge_budget(
-            ContractCostType::MemCmp,
-            Some(a_len.min(b_len)),
-        )?;
+        self.charge_budget(ContractCostType::MemCmp, Some(a_len.min(b_len)))?;
         Ok(a.cmp(b))
     }
 }
@@ -586,9 +583,8 @@ mod tests {
         let mut pairs_lazy_sorted = pairs.clone();
 
         pairs_xdr_sorted.sort_by(|(v1, _), (v2, _)| v1.cmp(v2));
-        pairs_lazy_sorted.sort_by(|(_, l1), (_, l2)| {
-            lazy_obj_discriminant(l1).cmp(&lazy_obj_discriminant(l2))
-        });
+        pairs_lazy_sorted
+            .sort_by(|(_, l1), (_, l2)| lazy_obj_discriminant(l1).cmp(&lazy_obj_discriminant(l2)));
 
         for ((xdr1, _), (xdr2, _)) in pairs_xdr_sorted.iter().zip(pairs_lazy_sorted.iter()) {
             assert_eq!(xdr1, xdr2);

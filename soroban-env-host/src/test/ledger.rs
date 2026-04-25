@@ -1,4 +1,7 @@
-use soroban_env_common::{xdr::{ScBytes, ScVal}, Env};
+use soroban_env_common::{
+    xdr::{ScBytes, ScVal},
+    Env,
+};
 
 use crate::{
     budget::Budget,

@@ -3,7 +3,7 @@ use crate::{
     budget::AsBudget,
     events::InternalEvent,
     host::{
-        metered_hash::{CountingHasher, MeteredHash, MeteredHashXdr},
+        metered_hash::{CountingHasher, MeteredHash},
         Context, Frame,
     },
     Host, HostError, Val,
@@ -260,7 +260,7 @@ impl Host {
         if let Ok(ctxs) = self.0.context_stack.try_borrow() {
             if let Some(ctx) = ctxs.last() {
                 if let Some(storage) = &ctx.storage {
-                    return storage.map.len();
+                    return storage.len();
                 }
             }
         }
@@ -270,7 +270,7 @@ impl Host {
         if let Ok(ctxs) = self.0.context_stack.try_borrow() {
             if let Some(ctx) = ctxs.last() {
                 if let Some(storage) = &ctx.storage {
-                    return self.hash_one(&storage.map);
+                    return self.hash_one(storage);
                 }
             }
         }

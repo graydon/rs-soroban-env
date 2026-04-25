@@ -173,9 +173,9 @@ impl BudgetDimension {
 
         #[cfg(all(not(target_family = "wasm"), feature = "tracy"))]
         if _is_cpu.0 {
-            let _span = tracy_span!("charge");
-            _span.emit_text(ty.name());
-            _span.emit_value(amount);
+            // let _span = tracy_span!("charge");
+            //             _span.emit_text(ty.name());
+            //             _span.emit_value(amount);
         }
 
         if is_shadow.0 {

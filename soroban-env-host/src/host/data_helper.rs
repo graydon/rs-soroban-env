@@ -7,15 +7,14 @@ use crate::{
     storage::{self, InstanceStorageMap, Storage},
     vm::VersionedContractCodeCostInputs,
     xdr::{
-        AccountEntry, AccountId, Asset, BytesM, ContractCodeEntry, ContractDataDurability,
-        ContractDataEntry, ContractExecutable, ContractId, ContractIdPreimage, ExtensionPoint,
-        Hash, HashIdPreimage, HashIdPreimageContractId,
-        LazyLedgerEntry, LazyLedgerKey, LedgerEntry,
-        LedgerEntryData, LedgerEntryExt, LedgerEntryType, LedgerKey, LedgerKeyAccount,
-        LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, PublicKey,
-        ScAddress, ScContractInstance, ScErrorCode, ScErrorType, ScMap, ScVal, ScValType,
-        Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
-        ContractCodeCostInputs, LazyScContractInstance,
+        AccountEntry, AccountId, Asset, BytesM, ContractCodeCostInputs, ContractCodeEntry,
+        ContractDataDurability, ContractDataEntry, ContractExecutable, ContractId,
+        ContractIdPreimage, ExtensionPoint, Hash, HashIdPreimage, HashIdPreimageContractId,
+        LazyLedgerEntry, LazyLedgerKey, LazyScContractInstance, LedgerEntry, LedgerEntryData,
+        LedgerEntryExt, LedgerEntryType, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
+        LedgerKeyContractData, LedgerKeyTrustLine, PublicKey, ScAddress, ScContractInstance,
+        ScErrorCode, ScErrorType, ScMap, ScVal, ScValType, Signer, SignerKey, ThresholdIndexes,
+        TrustLineAsset, Uint256,
     },
     AddressObject, Env, ErrorHandler, Host, HostError, StorageType, U32Val, Val,
 };
@@ -192,8 +191,7 @@ impl Host {
             1 => {
                 // V1: has cost inputs — deserialize just the ext sub-region
                 let eager_ext =
-                    crate::xdr::ContractCodeEntryExt::try_from(&lazy_ext)
-                    .map_err(|_| {
+                    crate::xdr::ContractCodeEntryExt::try_from(&lazy_ext).map_err(|_| {
                         err!(
                             self,
                             (ScErrorType::Storage, ScErrorCode::InternalError),
@@ -325,9 +323,8 @@ impl Host {
             .retrieve_contract_instance_from_storage(&instance_key)?
             .executable();
         if let Some(lazy_hash) = lazy_exec.as_wasm() {
-            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })?;
+            let wasm_hash = Hash::try_from(&lazy_hash)
+                .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
             let key = self.contract_code_ledger_key(&wasm_hash)?;
             self.try_borrow_storage_mut()?
                 .extend_ttl(self, key, threshold, extend_to, None)?;
@@ -362,9 +359,8 @@ impl Host {
             .retrieve_contract_instance_from_storage(instance_key)?
             .executable();
         if let Some(lazy_hash) = lazy_exec.as_wasm() {
-            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })?;
+            let wasm_hash = Hash::try_from(&lazy_hash)
+                .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
             let key = self.contract_code_ledger_key(&wasm_hash)?;
             self.try_borrow_storage_mut()?.extend_ttl_v2(
                 self,
@@ -433,9 +429,8 @@ impl Host {
                 )
             })?;
             // Deserialize just the AccountEntry sub-region
-            AccountEntry::try_from(&lazy_account).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })
+            AccountEntry::try_from(&lazy_account)
+                .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))
         })
     }
 
@@ -583,7 +578,9 @@ impl Host {
         address: AddressObject,
     ) -> Result<ContractId, HostError> {
         let lazy = self.get_lazy_obj(address)?;
-        let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let la = lazy
+            .as_address()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let addr = ScAddress::try_from(&la)?;
         self.contract_id_from_scaddress(addr)
     }
@@ -600,7 +597,10 @@ impl Host {
         // operation might only modify the internal `ScVal` value. Thus we
         // need to only overwrite the value in case if there is already an
         // existing ledger entry value for the key in the storage.
-        if self.try_borrow_storage_mut()?.has(&lazy_key, self, Some(k))? {
+        if self
+            .try_borrow_storage_mut()?
+            .has(&lazy_key, self, Some(k))?
+        {
             let (lazy_current, live_until_ledger) = self
                 .try_borrow_storage_mut()?
                 .get_with_live_until_ledger(&lazy_key, self, Some(k))?;
@@ -719,9 +719,8 @@ impl Host {
         let lazy_instance = self.retrieve_contract_instance_from_storage(&key)?;
         let lazy_exec = lazy_instance.executable();
         if let Some(lazy_hash) = lazy_exec.as_wasm() {
-            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
-                HostError::from((ScErrorType::Value, ScErrorCode::InternalError))
-            })?;
+            let wasm_hash = Hash::try_from(&lazy_hash)
+                .map_err(|_| HostError::from((ScErrorType::Value, ScErrorCode::InternalError)))?;
             let test_hash: Hash = crypto::sha256_hash_from_bytes(&[], self)?
                 .try_into()
                 .map_err(|_| {

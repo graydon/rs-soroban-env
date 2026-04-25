@@ -1,4 +1,5 @@
 use core::{cell::RefCell, cmp::Ordering, fmt::Debug};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::{
@@ -13,9 +14,10 @@ use crate::{
     vm::ModuleCache,
     xdr::{
         int128_helpers, AccountId, Asset, ContractCostType, ContractEventType, ContractExecutable,
-        ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2, Duration,
-        LedgerEntryData, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType, ScMapEntry,
-        ScMap, ScString, LazyScVal, ScSymbol, ScVal, ScVec, TimePoint, VecM,
+        ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2, Duration, Hash,
+        LazyScMap, LazyScVal, LazyScVec, LedgerEntryData, PublicKey, ScAddress, ScBytes,
+        ScErrorCode, ScErrorType, ScMap, ScMapEntry, ScString, ScSymbol, ScVal, ScVec, TimePoint,
+        VecM,
     },
     AddressObject, Bool, BytesObject, Compare, ContractTtlExtension, ConversionError, EnvBase,
     Error, LedgerInfo, MapObject, Object, StorageType, StringObject, Symbol, SymbolObject,
@@ -93,6 +95,7 @@ struct HostImpl {
     source_account: RefCell<Option<AccountId>>,
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<LazyScVal>>,
+    small_value_lazies: RefCell<HashMap<u64, LazyScVal>>,
     storage: RefCell<Storage>,
     context_stack: RefCell<Vec<Context>>,
     // Note: budget is refcounted and is _not_ deep-cloned when you call HostImpl::deep_clone,
@@ -230,6 +233,12 @@ impl_checked_borrow_helpers!(
     try_borrow_objects,
     try_borrow_objects_mut
 );
+impl_checked_borrow_helpers!(
+    small_value_lazies,
+    HashMap<u64, LazyScVal>,
+    try_borrow_small_value_lazies,
+    try_borrow_small_value_lazies_mut
+);
 impl_checked_borrow_helpers!(storage, Storage, try_borrow_storage, try_borrow_storage_mut);
 impl_checked_borrow_helpers!(
     context_stack,
@@ -359,6 +368,7 @@ impl Host {
             source_account: RefCell::new(None),
             ledger: RefCell::new(None),
             objects: Default::default(),
+            small_value_lazies: Default::default(),
             storage: RefCell::new(storage),
             context_stack: Default::default(),
             budget,
@@ -818,7 +828,7 @@ impl EnvBase for Host {
     }
 
     fn check_obj_integrity(&self, obj: Object) -> Result<(), HostError> {
-        use crate::{xdr, host_object::tag_from_lazy_scval};
+        use crate::{host_object::tag_from_lazy_scval, xdr};
         let lazy = self.get_lazy_obj(obj)?;
         let expected_tag = tag_from_lazy_scval(&lazy);
         let actual_tag = obj.as_val().get_tag();
@@ -928,7 +938,8 @@ impl EnvBase for Host {
         slice: &[u8],
     ) -> Result<BytesObject, HostError> {
         call_trace_env_call!(self, b, b_pos, slice.len());
-        let res = self.memobj_copy_from_slice(b, b_pos, slice)
+        let res = self
+            .memobj_copy_from_slice(b, b_pos, slice)
             .and_then(|o| Ok(unsafe { BytesObject::from_handle(o.get_handle()) }));
         call_trace_env_ret!(self, res);
         res
@@ -1237,13 +1248,13 @@ impl VmCallerEnv for Host {
                     let ao = self.get_lazy_obj(a)?;
                     let bo = self.get_lazy_obj(b)?;
                     Ok::<_, HostError>(Some(self.compare(&ao, &bo)?))
-                },
+                }
 
                 // We were given an object and a non-object: try a small-value comparison.
                 (Ok(a), Err(_)) => {
                     let lazy = self.get_lazy_obj(a)?;
                     Ok(self.lazy_obj_compare_to_small(&lazy, self.as_budget(), b)?)
-                },
+                }
                 // Same as previous case, but reversing the resulting order.
                 (Err(_), Ok(b)) => {
                     let lazy = self.get_lazy_obj(b)?;
@@ -1253,7 +1264,7 @@ impl VmCallerEnv for Host {
                         Some(Ordering::Greater) => Some(Ordering::Less),
                         other => other,
                     })
-                },
+                }
                 // We should have been given at least one object.
                 (Err(_), Err(_)) => {
                     return Err(self.err(
@@ -1392,8 +1403,13 @@ impl VmCallerEnv for Host {
         obj: U128Object,
     ) -> Result<u64, Self::Error> {
         let lazy = self.get_lazy_obj(obj)?;
-        let u = lazy.as_u128().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        Ok(int128_helpers::u128_lo(int128_helpers::u128_from_pieces(u.hi(), u.lo())))
+        let u = lazy
+            .as_u128()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        Ok(int128_helpers::u128_lo(int128_helpers::u128_from_pieces(
+            u.hi(),
+            u.lo(),
+        )))
     }
 
     fn obj_to_u128_hi64(
@@ -1402,8 +1418,13 @@ impl VmCallerEnv for Host {
         obj: U128Object,
     ) -> Result<u64, Self::Error> {
         let lazy = self.get_lazy_obj(obj)?;
-        let u = lazy.as_u128().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        Ok(int128_helpers::u128_hi(int128_helpers::u128_from_pieces(u.hi(), u.lo())))
+        let u = lazy
+            .as_u128()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        Ok(int128_helpers::u128_hi(int128_helpers::u128_from_pieces(
+            u.hi(),
+            u.lo(),
+        )))
     }
 
     fn obj_from_i128_pieces(
@@ -1421,8 +1442,13 @@ impl VmCallerEnv for Host {
         obj: I128Object,
     ) -> Result<u64, Self::Error> {
         let lazy = self.get_lazy_obj(obj)?;
-        let i = lazy.as_i128().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        Ok(int128_helpers::i128_lo(int128_helpers::i128_from_pieces(i.hi(), i.lo())))
+        let i = lazy
+            .as_i128()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        Ok(int128_helpers::i128_lo(int128_helpers::i128_from_pieces(
+            i.hi(),
+            i.lo(),
+        )))
     }
 
     fn obj_to_i128_hi64(
@@ -1431,8 +1457,13 @@ impl VmCallerEnv for Host {
         obj: I128Object,
     ) -> Result<i64, Self::Error> {
         let lazy = self.get_lazy_obj(obj)?;
-        let i = lazy.as_i128().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        Ok(int128_helpers::i128_hi(int128_helpers::i128_from_pieces(i.hi(), i.lo())))
+        let i = lazy
+            .as_i128()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        Ok(int128_helpers::i128_hi(int128_helpers::i128_from_pieces(
+            i.hi(),
+            i.lo(),
+        )))
     }
 
     fn obj_from_u256_pieces(
@@ -1452,8 +1483,12 @@ impl VmCallerEnv for Host {
         bytes: BytesObject,
     ) -> Result<U256Val, HostError> {
         let lazy = self.get_lazy_obj(bytes)?;
-        let bytes_data = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let num = U256::from_be_bytes(self.fixed_length_bytes_from_slice("U256 bytes", bytes_data.as_bytes())?);
+        let bytes_data = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let num = U256::from_be_bytes(
+            self.fixed_length_bytes_from_slice("U256 bytes", bytes_data.as_bytes())?,
+        );
         self.map_err(U256Val::try_from_val(self, &num))
     }
 
@@ -1465,9 +1500,10 @@ impl VmCallerEnv for Host {
         if let Ok(so) = U256Small::try_from(val) {
             self.add_obj_bytes(self.scbytes_from_slice(&U256::from(so).to_be_bytes())?)
         } else {
-            
             let lazy = self.get_lazy_obj(val)?;
-            let u = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let u = lazy.as_u256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             let u_val = u256_from_pieces(u.hi_hi(), u.hi_lo(), u.lo_hi(), u.lo_lo());
             self.add_obj_bytes(self.scbytes_from_slice(&u_val.to_be_bytes())?)
         }
@@ -1480,7 +1516,9 @@ impl VmCallerEnv for Host {
     ) -> Result<u64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let u = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let u = lazy.as_u256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(u.hi_hi())
         }
     }
@@ -1492,7 +1530,9 @@ impl VmCallerEnv for Host {
     ) -> Result<u64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let u = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let u = lazy.as_u256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(u.hi_lo())
         }
     }
@@ -1504,7 +1544,9 @@ impl VmCallerEnv for Host {
     ) -> Result<u64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let u = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let u = lazy.as_u256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(u.lo_hi())
         }
     }
@@ -1516,7 +1558,9 @@ impl VmCallerEnv for Host {
     ) -> Result<u64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let u = lazy.as_u256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let u = lazy.as_u256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(u.lo_lo())
         }
     }
@@ -1538,8 +1582,12 @@ impl VmCallerEnv for Host {
         bytes: BytesObject,
     ) -> Result<I256Val, HostError> {
         let lazy = self.get_lazy_obj(bytes)?;
-        let bytes_data = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let num = I256::from_be_bytes(self.fixed_length_bytes_from_slice("I256 bytes", bytes_data.as_bytes())?);
+        let bytes_data = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let num = I256::from_be_bytes(
+            self.fixed_length_bytes_from_slice("I256 bytes", bytes_data.as_bytes())?,
+        );
         I256Val::try_from_val(self, &num).map_err(|_| ConversionError.into())
     }
 
@@ -1551,9 +1599,10 @@ impl VmCallerEnv for Host {
         if let Ok(so) = I256Small::try_from(val) {
             self.add_obj_bytes(self.scbytes_from_slice(&I256::from(so).to_be_bytes())?)
         } else {
-            
             let lazy = self.get_lazy_obj(val)?;
-            let i = lazy.as_i256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let i = lazy.as_i256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             let i_val = i256_from_pieces(i.hi_hi(), i.hi_lo(), i.lo_hi(), i.lo_lo());
             self.add_obj_bytes(self.scbytes_from_slice(&i_val.to_be_bytes())?)
         }
@@ -1566,7 +1615,9 @@ impl VmCallerEnv for Host {
     ) -> Result<i64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let i = lazy.as_i256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let i = lazy.as_i256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(i.hi_hi())
         }
     }
@@ -1578,7 +1629,9 @@ impl VmCallerEnv for Host {
     ) -> Result<u64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let i = lazy.as_i256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let i = lazy.as_i256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(i.hi_lo())
         }
     }
@@ -1590,7 +1643,9 @@ impl VmCallerEnv for Host {
     ) -> Result<u64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let i = lazy.as_i256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let i = lazy.as_i256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(i.lo_hi())
         }
     }
@@ -1602,7 +1657,9 @@ impl VmCallerEnv for Host {
     ) -> Result<u64, HostError> {
         {
             let lazy = self.get_lazy_obj(obj)?;
-            let i = lazy.as_i256().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let i = lazy.as_i256().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             Ok(i.lo_lo())
         }
     }
@@ -1717,7 +1774,7 @@ impl VmCallerEnv for Host {
     // region: "map" module functions
 
     fn map_new(&self, _vmcaller: &mut VmCaller<Host>) -> Result<MapObject, HostError> {
-        self.add_obj_map_scval(ScMap(std::vec::Vec::new().try_into()?))
+        self.add_lazy_map(Self::empty_lazy_map()?)
     }
 
     fn map_put(
@@ -1727,14 +1784,16 @@ impl VmCallerEnv for Host {
         k: Val,
         v: Val,
     ) -> Result<MapObject, HostError> {
-        let mut entries = self.scmap_from_obj(m)?;
-        let k_scval = self.from_host_val(k)?;
-        let v_scval = self.from_host_val(v)?;
-        match self.scmap_find(&entries, &k_scval)? {
-            Ok(idx) => entries[idx].val = v_scval,
-            Err(idx) => entries.insert(idx, ScMapEntry { key: k_scval, val: v_scval }),
+        let map = self.lazy_map_from_obj(m)?;
+        let k_lazy = self.lazy_from_host_val(k)?;
+        let v_lazy = self.lazy_from_host_val(v)?;
+        let entry = Self::lazy_scmap_entry(&k_lazy, &v_lazy)?;
+        let edited = match self.lazy_scmap_find(&map, &k_lazy)? {
+            Ok(idx) => map.replace_element(idx as u32, &entry),
+            Err(idx) => map.insert_element(idx as u32, &entry),
         }
-        self.add_obj_map_scval(ScMap(entries.try_into()?))
+        .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_map(LazyScMap::from(edited.as_ref().clone()))
     }
 
     fn map_get(
@@ -1744,13 +1803,19 @@ impl VmCallerEnv for Host {
         k: Val,
     ) -> Result<Val, HostError> {
         let lazy = self.get_lazy_obj(m)?;
-        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lm = lazy
+            .as_map()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let k_lazy = self.lazy_from_host_val(k)?;
         match self.lazy_scmap_find(&sm, &k_lazy)? {
             Ok(idx) => {
-                let entry = sm.get(idx as u32).ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds)))?;
-                self.lazy_scval_to_host_val(&entry.val())
+                let entry = sm.get(idx as u32).ok_or_else(|| {
+                    HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds))
+                })?;
+                self.lazy_scval_to_host_val(entry.val())
             }
             Err(_) => Err(self.err(
                 ScErrorType::Object,
@@ -1767,12 +1832,14 @@ impl VmCallerEnv for Host {
         m: MapObject,
         k: Val,
     ) -> Result<MapObject, HostError> {
-        let mut entries = self.scmap_from_obj(m)?;
-        let k_scval = self.from_host_val(k)?;
-        match self.scmap_find(&entries, &k_scval)? {
+        let map = self.lazy_map_from_obj(m)?;
+        let k_lazy = self.lazy_from_host_val(k)?;
+        match self.lazy_scmap_find(&map, &k_lazy)? {
             Ok(idx) => {
-                entries.remove(idx);
-                self.add_obj_map_scval(ScMap(entries.try_into()?))
+                let edited = map.remove_element(idx as u32).map_err(|_| {
+                    HostError::from((ScErrorType::Object, ScErrorCode::InternalError))
+                })?;
+                self.add_lazy_map(LazyScMap::from(edited.as_ref().clone()))
             }
             Err(_) => Err(self.err(
                 ScErrorType::Object,
@@ -1785,8 +1852,12 @@ impl VmCallerEnv for Host {
 
     fn map_len(&self, _vmcaller: &mut VmCaller<Host>, m: MapObject) -> Result<U32Val, HostError> {
         let lazy = self.get_lazy_obj(m)?;
-        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lm = lazy
+            .as_map()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.usize_to_u32val(sm.element_count() as usize)
     }
 
@@ -1797,8 +1868,12 @@ impl VmCallerEnv for Host {
         k: Val,
     ) -> Result<Bool, HostError> {
         let lazy = self.get_lazy_obj(m)?;
-        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lm = lazy
+            .as_map()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let k_lazy = self.lazy_from_host_val(k)?;
         Ok(self.lazy_scmap_find(&sm, &k_lazy)?.is_ok().into())
     }
@@ -1811,13 +1886,21 @@ impl VmCallerEnv for Host {
     ) -> Result<Val, HostError> {
         let i: u32 = i.into();
         let lazy = self.get_lazy_obj(m)?;
-        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let entry = sm.get(i).ok_or_else(|| self.err(
-            ScErrorType::Object, ScErrorCode::IndexBounds,
-            "map index out of bounds", &[],
-        ))?;
-        self.lazy_scval_to_host_val(&entry.key())
+        let lm = lazy
+            .as_map()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let entry = sm.get(i).ok_or_else(|| {
+            self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "map index out of bounds",
+                &[],
+            )
+        })?;
+        self.lazy_scval_to_host_val(entry.key())
     }
 
     fn map_val_by_pos(
@@ -1828,13 +1911,21 @@ impl VmCallerEnv for Host {
     ) -> Result<Val, HostError> {
         let i: u32 = i.into();
         let lazy = self.get_lazy_obj(m)?;
-        let lm = lazy.as_map().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sm = lm.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let entry = sm.get(i).ok_or_else(|| self.err(
-            ScErrorType::Object, ScErrorCode::IndexBounds,
-            "map index out of bounds", &[],
-        ))?;
-        self.lazy_scval_to_host_val(&entry.val())
+        let lm = lazy
+            .as_map()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sm = lm
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let entry = sm.get(i).ok_or_else(|| {
+            self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "map index out of bounds",
+                &[],
+            )
+        })?;
+        self.lazy_scval_to_host_val(entry.val())
     }
 
     fn map_keys(
@@ -1915,7 +2006,9 @@ impl VmCallerEnv for Host {
         // Sort by key using budget-metered comparison
         // (keys should already be sorted since they're symbols, but enforce it)
         for i in 1..entries.len() {
-            let cmp = self.as_budget().compare(&entries[i-1].key, &entries[i].key)?;
+            let cmp = self
+                .as_budget()
+                .compare(&entries[i - 1].key, &entries[i].key)?;
             if cmp != Ordering::Less {
                 return Err(self.err(
                     ScErrorType::Object,
@@ -1957,12 +2050,14 @@ impl VmCallerEnv for Host {
             keys_pos,
             len as usize,
             |n, slice| {
-                let entry = entries.get(n).ok_or_else(|| self.err(
-                    ScErrorType::Object,
-                    ScErrorCode::IndexBounds,
-                    "vector out of bounds while unpacking map to linear memory",
-                    &[],
-                ))?;
+                let entry = entries.get(n).ok_or_else(|| {
+                    self.err(
+                        ScErrorType::Object,
+                        ScErrorCode::IndexBounds,
+                        "vector out of bounds while unpacking map to linear memory",
+                        &[],
+                    )
+                })?;
                 let key_val = self.to_host_val(&entry.key)?;
                 let sym = Symbol::try_from(key_val)?;
                 self.check_symbol_matches(slice, sym)?;
@@ -1972,7 +2067,10 @@ impl VmCallerEnv for Host {
 
         // Step 2: write all vals.
         // charges memcpy of converting map entries into bytes
-        self.charge_budget(ContractCostType::MemCpy, Some((len as u64).saturating_mul(8)))?;
+        self.charge_budget(
+            ContractCostType::MemCpy,
+            Some((len as u64).saturating_mul(8)),
+        )?;
         self.metered_vm_write_vals_to_linear_memory(
             vmcaller,
             &vm,
@@ -1993,7 +2091,7 @@ impl VmCallerEnv for Host {
     // region: "vec" module functions
 
     fn vec_new(&self, _vmcaller: &mut VmCaller<Host>) -> Result<VecObject, HostError> {
-        self.add_obj_vec_scval(ScVec(std::vec::Vec::new().try_into()?))
+        self.add_lazy_vec(Self::empty_lazy_vec()?)
     }
 
     fn vec_put(
@@ -2004,10 +2102,13 @@ impl VmCallerEnv for Host {
         x: Val,
     ) -> Result<VecObject, HostError> {
         let i: u32 = i.into();
-        let mut elems = self.scvec_from_obj(v)?;
-        self.validate_index_lt_bound(i, elems.len())?;
-        elems[i as usize] = self.from_host_val(x)?;
-        self.add_obj_vec_scval(ScVec(elems.try_into()?))
+        let elems = self.lazy_vec_from_obj(v)?;
+        self.validate_index_lt_bound(i, elems.element_count() as usize)?;
+        let x = self.lazy_from_host_val(x)?;
+        let edited = elems
+            .replace_element(i, &x)
+            .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_get(
@@ -2018,13 +2119,22 @@ impl VmCallerEnv for Host {
     ) -> Result<Val, HostError> {
         let i: u32 = i.into();
         let lazy = self.get_lazy_obj(v)?;
-        let lv = lazy.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lv = lazy
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.validate_index_lt_bound(i, sv.element_count() as usize)?;
-        let elem = sv.get(i).ok_or_else(|| self.err(
-            ScErrorType::Object, ScErrorCode::IndexBounds, "vec_get out of bounds", &[],
-        ))?;
-        self.lazy_scval_to_host_val(&elem)
+        let elem = sv.get(i).ok_or_else(|| {
+            self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "vec_get out of bounds",
+                &[],
+            )
+        })?;
+        self.lazy_scval_to_host_val(elem)
     }
 
     fn vec_del(
@@ -2034,16 +2144,22 @@ impl VmCallerEnv for Host {
         i: U32Val,
     ) -> Result<VecObject, HostError> {
         let i: u32 = i.into();
-        let mut elems = self.scvec_from_obj(v)?;
-        self.validate_index_lt_bound(i, elems.len())?;
-        elems.remove(i as usize);
-        self.add_obj_vec_scval(ScVec(elems.try_into()?))
+        let elems = self.lazy_vec_from_obj(v)?;
+        self.validate_index_lt_bound(i, elems.element_count() as usize)?;
+        let edited = elems
+            .remove_element(i)
+            .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_len(&self, _vmcaller: &mut VmCaller<Host>, v: VecObject) -> Result<U32Val, HostError> {
         let lazy = self.get_lazy_obj(v)?;
-        let lv = lazy.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lv = lazy
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.usize_to_u32val(sv.element_count() as usize)
     }
 
@@ -2053,9 +2169,12 @@ impl VmCallerEnv for Host {
         v: VecObject,
         x: Val,
     ) -> Result<VecObject, HostError> {
-        let mut elems = self.scvec_from_obj(v)?;
-        elems.insert(0, self.from_host_val(x)?);
-        self.add_obj_vec_scval(ScVec(elems.try_into()?))
+        let elems = self.lazy_vec_from_obj(v)?;
+        let x = self.lazy_from_host_val(x)?;
+        let edited = elems
+            .insert_element(0, &x)
+            .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_pop_front(
@@ -2063,12 +2182,19 @@ impl VmCallerEnv for Host {
         _vmcaller: &mut VmCaller<Host>,
         v: VecObject,
     ) -> Result<VecObject, HostError> {
-        let mut elems = self.scvec_from_obj(v)?;
-        if elems.is_empty() {
-            return Err(self.err(ScErrorType::Object, ScErrorCode::IndexBounds, "vec is empty", &[]));
+        let elems = self.lazy_vec_from_obj(v)?;
+        if elems.element_count() == 0 {
+            return Err(self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "vec is empty",
+                &[],
+            ));
         }
-        elems.remove(0);
-        self.add_obj_vec_scval(ScVec(elems.try_into()?))
+        let edited = elems
+            .remove_element(0)
+            .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_push_back(
@@ -2077,9 +2203,12 @@ impl VmCallerEnv for Host {
         v: VecObject,
         x: Val,
     ) -> Result<VecObject, HostError> {
-        let mut elems = self.scvec_from_obj(v)?;
-        elems.push(self.from_host_val(x)?);
-        self.add_obj_vec_scval(ScVec(elems.try_into()?))
+        let elems = self.lazy_vec_from_obj(v)?;
+        let x = self.lazy_from_host_val(x)?;
+        let edited = elems
+            .insert_element(elems.element_count(), &x)
+            .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_pop_back(
@@ -2087,36 +2216,67 @@ impl VmCallerEnv for Host {
         _vmcaller: &mut VmCaller<Host>,
         v: VecObject,
     ) -> Result<VecObject, HostError> {
-        let mut elems = self.scvec_from_obj(v)?;
-        if elems.is_empty() {
-            return Err(self.err(ScErrorType::Object, ScErrorCode::IndexBounds, "vec is empty", &[]));
+        let elems = self.lazy_vec_from_obj(v)?;
+        let count = elems.element_count();
+        if count == 0 {
+            return Err(self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "vec is empty",
+                &[],
+            ));
         }
-        elems.pop();
-        self.add_obj_vec_scval(ScVec(elems.try_into()?))
+        let edited = elems
+            .remove_element(count - 1)
+            .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_front(&self, _vmcaller: &mut VmCaller<Host>, v: VecObject) -> Result<Val, HostError> {
         let lazy = self.get_lazy_obj(v)?;
-        let lv = lazy.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let first = sv.get(0).ok_or_else(|| self.err(
-            ScErrorType::Object, ScErrorCode::IndexBounds, "vec is empty", &[],
-        ))?;
-        self.lazy_scval_to_host_val(&first)
+        let lv = lazy
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let first = sv.get(0).ok_or_else(|| {
+            self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "vec is empty",
+                &[],
+            )
+        })?;
+        self.lazy_scval_to_host_val(first)
     }
 
     fn vec_back(&self, _vmcaller: &mut VmCaller<Host>, v: VecObject) -> Result<Val, HostError> {
         let lazy = self.get_lazy_obj(v)?;
-        let lv = lazy.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lv = lazy
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let count = sv.element_count();
         if count == 0 {
-            return Err(self.err(ScErrorType::Object, ScErrorCode::IndexBounds, "vec is empty", &[]));
+            return Err(self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "vec is empty",
+                &[],
+            ));
         }
-        let last = sv.get(count - 1).ok_or_else(|| self.err(
-            ScErrorType::Object, ScErrorCode::IndexBounds, "vec is empty", &[],
-        ))?;
-        self.lazy_scval_to_host_val(&last)
+        let last = sv.get(count - 1).ok_or_else(|| {
+            self.err(
+                ScErrorType::Object,
+                ScErrorCode::IndexBounds,
+                "vec is empty",
+                &[],
+            )
+        })?;
+        self.lazy_scval_to_host_val(last)
     }
 
     fn vec_insert(
@@ -2127,10 +2287,13 @@ impl VmCallerEnv for Host {
         x: Val,
     ) -> Result<VecObject, HostError> {
         let i: u32 = i.into();
-        let mut elems = self.scvec_from_obj(v)?;
-        self.validate_index_le_bound(i, elems.len())?;
-        elems.insert(i as usize, self.from_host_val(x)?);
-        self.add_obj_vec_scval(ScVec(elems.try_into()?))
+        let elems = self.lazy_vec_from_obj(v)?;
+        self.validate_index_le_bound(i, elems.element_count() as usize)?;
+        let x = self.lazy_from_host_val(x)?;
+        let edited = elems
+            .insert_element(i, &x)
+            .map_err(|_| HostError::from((ScErrorType::Object, ScErrorCode::InternalError)))?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_append(
@@ -2139,13 +2302,12 @@ impl VmCallerEnv for Host {
         v1: VecObject,
         v2: VecObject,
     ) -> Result<VecObject, HostError> {
-        let mut elems1 = self.scvec_from_obj(v1)?;
-        let elems2 = self.scvec_from_obj(v2)?;
-        if elems1.len() > u32::MAX as usize - elems2.len() {
-            return Err(self.err_arith_overflow());
-        }
-        elems1.extend(elems2);
-        self.add_obj_vec_scval(ScVec(elems1.try_into()?))
+        let elems1 = self.lazy_vec_from_obj(v1)?;
+        let elems2 = self.lazy_vec_from_obj(v2)?;
+        let edited = elems1
+            .append_elements(&elems2)
+            .map_err(|_| self.err_arith_overflow())?;
+        self.add_lazy_vec(LazyScVec::from(edited.as_ref().clone()))
     }
 
     fn vec_slice(
@@ -2170,8 +2332,12 @@ impl VmCallerEnv for Host {
         x: Val,
     ) -> Result<Val, Self::Error> {
         let lazy_vec = self.get_lazy_obj(v)?;
-        let lv = lazy_vec.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lv = lazy_vec
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let x_lazy = self.lazy_from_host_val(x)?;
         for (i, elem) in sv.iter().enumerate() {
             if self.compare(&x_lazy, &elem)? == Ordering::Equal {
@@ -2188,10 +2354,13 @@ impl VmCallerEnv for Host {
         x: Val,
     ) -> Result<Val, Self::Error> {
         let lazy_vec = self.get_lazy_obj(v)?;
-        let lv = lazy_vec.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lv = lazy_vec
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let x_lazy = self.lazy_from_host_val(x)?;
-        let count = sv.element_count();
         let mut result = None;
         for (i, elem) in sv.iter().enumerate() {
             if self.compare(&x_lazy, &elem)? == Ordering::Equal {
@@ -2211,15 +2380,21 @@ impl VmCallerEnv for Host {
         x: Val,
     ) -> Result<u64, Self::Error> {
         let lazy_vec = self.get_lazy_obj(v)?;
-        let lv = lazy_vec.as_vec().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let sv = lv.get().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lv = lazy_vec
+            .as_vec()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let sv = lv
+            .get()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let x_lazy = self.lazy_from_host_val(x)?;
         let count = sv.element_count() as usize;
         let mut lo = 0usize;
         let mut hi = count;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let elem = sv.get(mid as u32).ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds)))?;
+            let elem = sv
+                .get(mid as u32)
+                .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::IndexBounds)))?;
             match self.compare(&elem, &x_lazy)? {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
@@ -2255,7 +2430,8 @@ impl VmCallerEnv for Host {
             self.check_val_integrity(*v)?;
         }
         // Convert Vals to ScVals
-        let scvals: std::vec::Vec<ScVal> = vals.iter()
+        let scvals: std::vec::Vec<ScVal> = vals
+            .iter()
             .map(|v| self.from_host_val(*v))
             .collect::<Result<_, _>>()?;
         self.add_obj_vec_scval(ScVec(scvals.try_into()?))
@@ -2279,21 +2455,19 @@ impl VmCallerEnv for Host {
             ));
         }
         // Convert ScVals to Vals
-        let vals: std::vec::Vec<Val> = elems.iter()
+        let vals: std::vec::Vec<Val> = elems
+            .iter()
             .map(|sv| self.to_host_val(sv))
             .collect::<Result<_, _>>()?;
-        self.charge_budget(ContractCostType::MemCpy, Some((len as u64).saturating_mul(8)))?;
-        self.metered_vm_write_vals_to_linear_memory(
-            vmcaller,
-            &vm,
-            pos,
-            &vals,
-            |x| {
-                Ok(u64::to_le_bytes(
-                    self.absolute_to_relative(*x)?.get_payload(),
-                ))
-            },
+        self.charge_budget(
+            ContractCostType::MemCpy,
+            Some((len as u64).saturating_mul(8)),
         )?;
+        self.metered_vm_write_vals_to_linear_memory(vmcaller, &vm, pos, &vals, |x| {
+            Ok(u64::to_le_bytes(
+                self.absolute_to_relative(*x)?.get_payload(),
+            ))
+        })?;
         Ok(Val::VOID)
     }
 
@@ -2313,7 +2487,9 @@ impl VmCallerEnv for Host {
                 self.put_contract_data_into_ledger(k, v, t)?
             }
             StorageType::Instance => self.with_mut_instance_storage(|s| {
-                s.map = s.map.insert(k, v, self)?;
+                let key = self.lazy_from_host_val_for_storage(k)?;
+                let val = self.lazy_from_host_val(v)?;
+                s.insert(key, val, self)?;
                 Ok(())
             })?,
         };
@@ -2334,7 +2510,8 @@ impl VmCallerEnv for Host {
                 self.try_borrow_storage_mut()?.has(&key, self, Some(k))?
             }
             StorageType::Instance => {
-                self.with_instance_storage(|s| Ok(s.map.get(&k, self)?.is_some()))?
+                let key = self.lazy_from_host_val_for_storage(k)?;
+                self.with_instance_storage(|s| s.contains_key(&key, self))?
             }
         };
 
@@ -2368,11 +2545,11 @@ impl VmCallerEnv for Host {
                 // are converted immediately; complex types (Vec, Map, etc.)
                 // are wrapped as HostObject::Lazy and only materialized when
                 // the contract actually accesses them.
-                Ok(self.lazy_scval_to_host_val(&lazy_val)?)
+                Ok(self.lazy_scval_to_host_val(lazy_val)?)
             }
             StorageType::Instance => self.with_instance_storage(|s| {
-                s.map
-                    .get(&k, self)?
+                let key = self.lazy_from_host_val_for_storage(k)?;
+                s.get(&key, self)?
                     .ok_or_else(|| {
                         self.err(
                             ScErrorType::Storage,
@@ -2381,7 +2558,7 @@ impl VmCallerEnv for Host {
                             &[k],
                         )
                     })
-                    .copied()
+                    .and_then(|v| self.lazy_scval_to_host_val(v))
             }),
         }
     }
@@ -2400,9 +2577,8 @@ impl VmCallerEnv for Host {
             }
             StorageType::Instance => {
                 self.with_mut_instance_storage(|s| {
-                    if let Some((new_map, _)) = s.map.remove(&k, self)? {
-                        s.map = new_map;
-                    }
+                    let key = self.lazy_from_host_val_for_storage(k)?;
+                    s.remove(&key, self)?;
                     Ok(())
                 })?;
             }
@@ -2656,7 +2832,9 @@ impl VmCallerEnv for Host {
         );
 
         let lazy = self.get_lazy_obj(wasm)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let wasm_vec = self.metered_slice_to_vec(lb.as_bytes())?;
         self.upload_contract_wasm(wasm_vec)
     }
@@ -2678,9 +2856,8 @@ impl VmCallerEnv for Host {
         let curr_contract_id = self.get_current_contract_id_internal()?;
         let key = self.contract_instance_ledger_key(&curr_contract_id)?;
         let old_instance = self.retrieve_contract_instance_from_storage(&key)?;
-        let old_executable = ContractExecutable::try_from(&old_instance.executable()).map_err(|_| {
-            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-        })?;
+        let old_executable = ContractExecutable::try_from(&old_instance.executable())
+            .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
         let new_executable = ContractExecutable::Wasm(wasm_hash);
         self.emit_update_contract_event(&old_executable, &new_executable)?;
         self.store_contract_instance(Some(new_executable), None, curr_contract_id, &key)?;
@@ -2815,7 +2992,9 @@ impl VmCallerEnv for Host {
         b: BytesObject,
     ) -> Result<Val, HostError> {
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let scv = self.metered_from_xdr::<ScVal>(lb.as_bytes())?;
         // Metering bug: the representation check is not metered,
         // so if the value is not valid, we won't charge anything for
@@ -2888,7 +3067,9 @@ impl VmCallerEnv for Host {
         lm_pos: U32Val,
         len: U32Val,
     ) -> Result<BytesObject, HostError> {
-        let obj = self.memobj_new_from_linear_memory(vmcaller, lm_pos, len, |v| Ok(ScVal::Bytes(ScBytes(v.try_into()?))))?;
+        let obj = self.memobj_new_from_linear_memory(vmcaller, lm_pos, len, |v| {
+            Ok(ScVal::Bytes(ScBytes(v.try_into()?)))
+        })?;
         Ok(unsafe { BytesObject::from_handle(obj.get_handle()) })
     }
 
@@ -2898,7 +3079,9 @@ impl VmCallerEnv for Host {
         lm_pos: U32Val,
         len: U32Val,
     ) -> Result<StringObject, HostError> {
-        let obj = self.memobj_new_from_linear_memory(vmcaller, lm_pos, len, |v| Ok(ScVal::String(ScString(v.try_into()?))))?;
+        let obj = self.memobj_new_from_linear_memory(vmcaller, lm_pos, len, |v| {
+            Ok(ScVal::String(ScString(v.try_into()?)))
+        })?;
         Ok(unsafe { StringObject::from_handle(obj.get_handle()) })
     }
 
@@ -2908,7 +3091,9 @@ impl VmCallerEnv for Host {
         lm_pos: U32Val,
         len: U32Val,
     ) -> Result<SymbolObject, HostError> {
-        let obj = self.memobj_new_from_linear_memory(vmcaller, lm_pos, len, |v| Ok(ScVal::Symbol(ScSymbol(v.try_into()?))))?;
+        let obj = self.memobj_new_from_linear_memory(vmcaller, lm_pos, len, |v| {
+            Ok(ScVal::Symbol(ScSymbol(v.try_into()?)))
+        })?;
         Ok(unsafe { SymbolObject::from_handle(obj.get_handle()) })
     }
 
@@ -2963,7 +3148,9 @@ impl VmCallerEnv for Host {
         let i: u32 = iv.into();
         let u = self.u8_from_u32val_input("u", u)?;
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let src = lb.as_bytes();
         let mut vnew = self.metered_slice_to_vec(src)?;
         match vnew.get_mut(i as usize) {
@@ -2989,7 +3176,9 @@ impl VmCallerEnv for Host {
     ) -> Result<U32Val, HostError> {
         let i: u32 = iv.into();
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         lb.as_bytes()
             .get(i as usize)
             .map(|u| U32Val::from(u32::from(*u)))
@@ -3011,7 +3200,9 @@ impl VmCallerEnv for Host {
     ) -> Result<BytesObject, HostError> {
         let i: u32 = i.into();
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let src = lb.as_bytes();
         self.validate_index_lt_bound(i, src.len())?;
         let mut vnew = self.metered_slice_to_vec(src)?;
@@ -3030,7 +3221,9 @@ impl VmCallerEnv for Host {
         b: BytesObject,
     ) -> Result<U32Val, HostError> {
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.usize_to_u32val(lb.data_len() as usize)
     }
 
@@ -3041,7 +3234,9 @@ impl VmCallerEnv for Host {
         b: StringObject,
     ) -> Result<U32Val, HostError> {
         let lazy = self.get_lazy_obj(b)?;
-        let ls = lazy.as_string().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let ls = lazy
+            .as_string()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.usize_to_u32val(ls.data_len() as usize)
     }
 
@@ -3052,7 +3247,9 @@ impl VmCallerEnv for Host {
         b: SymbolObject,
     ) -> Result<U32Val, HostError> {
         let lazy = self.get_lazy_obj(b)?;
-        let ls = lazy.as_symbol().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let ls = lazy
+            .as_symbol()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.usize_to_u32val(ls.data_len() as usize)
     }
 
@@ -3065,7 +3262,9 @@ impl VmCallerEnv for Host {
     ) -> Result<BytesObject, HostError> {
         let u = self.u8_from_u32val_input("u", u)?;
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let src = lb.as_bytes();
         let len = self.validate_usize_sum_fits_in_u32(src.len(), 1)?;
         let mut vnew = Vec::<u8>::with_metered_capacity(len, self)?;
@@ -3081,7 +3280,9 @@ impl VmCallerEnv for Host {
         b: BytesObject,
     ) -> Result<BytesObject, HostError> {
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let src = lb.as_bytes();
         if src.is_empty() {
             return Err(self.err(
@@ -3103,7 +3304,9 @@ impl VmCallerEnv for Host {
         b: BytesObject,
     ) -> Result<U32Val, HostError> {
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         lb.as_bytes()
             .first()
             .map(|u| U32Val::from(u32::from(*u)))
@@ -3124,7 +3327,9 @@ impl VmCallerEnv for Host {
         b: BytesObject,
     ) -> Result<U32Val, HostError> {
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         lb.as_bytes()
             .last()
             .map(|u| U32Val::from(u32::from(*u)))
@@ -3148,7 +3353,9 @@ impl VmCallerEnv for Host {
         let i: u32 = i.into();
         let u = self.u8_from_u32val_input("u", u)?;
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let src = lb.as_bytes();
         self.validate_index_le_bound(i, src.len())?;
         let len = self.validate_usize_sum_fits_in_u32(src.len(), 1)?;
@@ -3166,8 +3373,12 @@ impl VmCallerEnv for Host {
     ) -> Result<BytesObject, HostError> {
         let lazy1 = self.get_lazy_obj(b1)?;
         let lazy2 = self.get_lazy_obj(b2)?;
-        let lb1 = lazy1.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let lb2 = lazy2.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb1 = lazy1
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb2 = lazy2
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let sb1 = lb1.as_bytes();
         let sb2 = lb2.as_bytes();
         let len = self.validate_usize_sum_fits_in_u32(sb1.len(), sb2.len())?;
@@ -3187,11 +3398,15 @@ impl VmCallerEnv for Host {
         let start: u32 = start.into();
         let end: u32 = end.into();
         let lazy = self.get_lazy_obj(b)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let bytes = lb.as_bytes();
         let range = self.valid_range_from_start_end_bound(start, end, bytes.len())?;
         let vnew = self.metered_slice_to_vec(
-            bytes.get(range).ok_or_else(|| self.err_oob_object_index(None))?,
+            bytes
+                .get(range)
+                .ok_or_else(|| self.err_oob_object_index(None))?,
         )?;
         self.add_obj_bytes(self.scbytes_from_vec(vnew)?)
     }
@@ -3202,7 +3417,9 @@ impl VmCallerEnv for Host {
         str: StringObject,
     ) -> Result<BytesObject, HostError> {
         let lazy = self.get_lazy_obj(str)?;
-        let ls = lazy.as_string().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let ls = lazy
+            .as_string()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let scb = self.scbytes_from_slice(ls.as_bytes())?;
         self.add_obj_bytes(scb)
     }
@@ -3213,7 +3430,9 @@ impl VmCallerEnv for Host {
         bytes: BytesObject,
     ) -> Result<StringObject, HostError> {
         let lazy = self.get_lazy_obj(bytes)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let bytes = self.metered_slice_to_vec(lb.as_bytes())?;
         self.add_obj_string(ScString(bytes.try_into()?))
     }
@@ -3253,7 +3472,9 @@ impl VmCallerEnv for Host {
         let sig = self.ed25519_signature_from_bytesobj_input("sig", s)?;
         let res = {
             let lazy = self.get_lazy_obj(x)?;
-            let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+            let lb = lazy.as_bytes().ok_or_else(|| {
+                HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType))
+            })?;
             self.verify_sig_ed25519_internal(lb.as_bytes(), &verifying_key, &sig)
         };
         Ok(res?.into())
@@ -3354,8 +3575,12 @@ impl VmCallerEnv for Host {
     ) -> Result<BytesObject, HostError> {
         let msg_lazy = self.get_lazy_obj(mo)?;
         let dst_lazy = self.get_lazy_obj(dst)?;
-        let msg_bytes = msg_lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let dst_bytes = dst_lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let msg_bytes = msg_lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let dst_bytes = dst_lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let g1 = self.hash_to_curve(
             dst_bytes.as_bytes(),
             msg_bytes.as_bytes(),
@@ -3431,8 +3656,12 @@ impl VmCallerEnv for Host {
     ) -> Result<BytesObject, HostError> {
         let msg_lazy = self.get_lazy_obj(msg)?;
         let dst_lazy = self.get_lazy_obj(dst)?;
-        let msg_bytes = msg_lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
-        let dst_bytes = dst_lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let msg_bytes = msg_lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let dst_bytes = dst_lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let g2 = self.hash_to_curve(
             dst_bytes.as_bytes(),
             msg_bytes.as_bytes(),
@@ -3784,7 +4013,9 @@ impl VmCallerEnv for Host {
         address: AddressObject,
     ) -> Result<StringObject, Self::Error> {
         let lazy = self.get_lazy_obj(address)?;
-        let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let la = lazy
+            .as_address()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let addr = ScAddress::try_from(&la)?;
         let strkey = self.non_muxed_sc_address_to_strkey(&addr)?;
         self.add_obj_string(ScString(strkey.try_into()?))
@@ -3804,12 +4035,14 @@ impl VmCallerEnv for Host {
             )
         })?;
         let lazy = self.get_lazy_obj(address_obj)?;
-        let la = lazy.as_address().ok_or_else(|| self.err(
-            ScErrorType::Value,
-            ScErrorCode::UnexpectedType,
-            "value is not an AddressObject or MuxedAddressObject",
-            &[address],
-        ))?;
+        let la = lazy.as_address().ok_or_else(|| {
+            self.err(
+                ScErrorType::Value,
+                ScErrorCode::UnexpectedType,
+                "value is not an AddressObject or MuxedAddressObject",
+                &[address],
+            )
+        })?;
         let addr = ScAddress::try_from(&la)?;
         let strkey = self.non_muxed_sc_address_to_strkey(&addr)?;
         self.add_obj_string(ScString(strkey.try_into()?))
@@ -3831,9 +4064,7 @@ impl VmCallerEnv for Host {
     ) -> Result<Val, Self::Error> {
         let sc_addr = self.strkey_to_scaddress(strkey_obj, true)?;
         match &sc_addr {
-            ScAddress::MuxedAccount(_) => {
-                Ok(self.add_obj_muxed_address(sc_addr)?.to_val())
-            }
+            ScAddress::MuxedAccount(_) => Ok(self.add_obj_muxed_address(sc_addr)?.to_val()),
             _ => Ok(self.add_obj_address(sc_addr)?.to_val()),
         }
     }
@@ -3844,14 +4075,14 @@ impl VmCallerEnv for Host {
         muxed_address: MuxedAddressObject,
     ) -> Result<AddressObject, Self::Error> {
         let lazy = self.get_lazy_obj(muxed_address)?;
-        let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let la = lazy
+            .as_address()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let addr = ScAddress::try_from(&la)?;
         let sc_address = match addr {
-            ScAddress::MuxedAccount(muxed_account) => {
-                Ok(ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(
-                    muxed_account.ed25519,
-                ))))
-            }
+            ScAddress::MuxedAccount(muxed_account) => Ok(ScAddress::Account(AccountId(
+                PublicKey::PublicKeyTypeEd25519(muxed_account.ed25519),
+            ))),
             _ => Err(self.err(
                 ScErrorType::Object,
                 ScErrorCode::InternalError,
@@ -3868,7 +4099,9 @@ impl VmCallerEnv for Host {
         muxed_address: MuxedAddressObject,
     ) -> Result<U64Val, Self::Error> {
         let lazy = self.get_lazy_obj(muxed_address)?;
-        let la = lazy.as_address().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let la = lazy
+            .as_address()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let addr = ScAddress::try_from(&la)?;
         let mux_id = match addr {
             ScAddress::MuxedAccount(muxed_account) => Ok(muxed_account.id),
@@ -3923,13 +4156,11 @@ impl VmCallerEnv for Host {
                         )
                     })?;
                     // Deserialize just the executable field
-                    let exec = ContractExecutable::try_from(&lazy_instance.executable())
-                        .map_err(|_| {
-                            HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-                        })?;
+                    let exec = ContractExecutable::try_from(&lazy_instance.executable()).map_err(
+                        |_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)),
+                    )?;
                     Some(AddressExecutable::from_contract_executable_xdr(
-                        &self,
-                        &exec,
+                        &self, &exec,
                     )?)
                 } else {
                     None
@@ -3959,7 +4190,9 @@ impl VmCallerEnv for Host {
         seed: BytesObject,
     ) -> Result<Void, Self::Error> {
         let lazy = self.get_lazy_obj(seed)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let slice = lb.as_bytes();
         self.charge_budget(ContractCostType::MemCpy, Some(prng::SEED_BYTES))?;
         if let Ok(seed32) = slice.try_into() {
@@ -4087,9 +4320,8 @@ impl Host {
             .retrieve_contract_instance_from_storage(&key)?
             .executable();
         if let Some(lazy_hash) = lazy_exec.as_wasm() {
-            let wasm_hash = Hash::try_from(&lazy_hash).map_err(|_| {
-                HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
-            })?;
+            let wasm_hash = Hash::try_from(&lazy_hash)
+                .map_err(|_| HostError::from((ScErrorType::Storage, ScErrorCode::InternalError)))?;
             let key = self.contract_code_ledger_key(&wasm_hash)?;
             let (_, live_until) = self
                 .try_borrow_storage_mut()?

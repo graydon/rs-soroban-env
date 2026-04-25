@@ -71,7 +71,9 @@ impl Host {
         k: BytesObject,
     ) -> Result<ed25519_dalek::VerifyingKey, HostError> {
         let lazy = self.get_lazy_obj(k)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.ed25519_pub_key_from_bytes(lb.as_bytes())
     }
 
@@ -160,7 +162,9 @@ impl Host {
         k: BytesObject,
     ) -> Result<p256::ecdsa::VerifyingKey, HostError> {
         let lazy = self.get_lazy_obj(k)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.secp256r1_decode_sec1_uncompressed_pubkey(lb.as_bytes())
     }
 
@@ -203,7 +207,9 @@ impl Host {
         SignatureSize<C>: ArrayLength<u8>,
     {
         let lazy = self.get_lazy_obj(k)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         self.ecdsa_signature_from_bytes(lb.as_bytes())
     }
 
@@ -267,7 +273,9 @@ impl Host {
         x: BytesObject,
     ) -> Result<Vec<u8>, HostError> {
         let lazy = self.get_lazy_obj(x)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let hash = sha256_hash_from_bytes(lb.as_bytes(), self)?;
         if hash.len() != 32 {
             return Err(err!(
@@ -304,7 +312,9 @@ impl Host {
         x: BytesObject,
     ) -> Result<Vec<u8>, HostError> {
         let lazy = self.get_lazy_obj(x)?;
-        let lb = lazy.as_bytes().ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
+        let lb = lazy
+            .as_bytes()
+            .ok_or_else(|| HostError::from((ScErrorType::Object, ScErrorCode::UnexpectedType)))?;
         let hash = self.keccak256_hash_from_bytes(lb.as_bytes())?;
         if hash.len() != 32 {
             return Err(err!(

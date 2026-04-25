@@ -1,7 +1,8 @@
 use crate::{
     budget::Budget,
     storage::{Footprint, Storage},
-    xdr::ScVec, Host, HostError, LedgerInfo, MeteredOrdMap,
+    xdr::ScVec,
+    Host, HostError, LedgerInfo, MeteredOrdMap,
 };
 use soroban_env_common::{Env, Symbol};
 use soroban_test_wasms::{ADD_I32, COMPLEX};

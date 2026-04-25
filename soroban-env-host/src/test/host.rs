@@ -36,10 +36,7 @@ fn invalid_object_handles() -> Result<(), HostError> {
 
     // Create the object in host1, and then try to fetch from host2
     let obj = host2.get_ledger_network_id()?;
-    let err = host1
-        .deserialize_obj(obj)
-        .err()
-        .unwrap();
+    let err = host1.deserialize_obj(obj).err().unwrap();
 
     assert!(err.error.is_type(ScErrorType::Value));
     assert!(err.error.is_code(ScErrorCode::InvalidInput));

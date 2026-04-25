@@ -1,5 +1,9 @@
 use super::{TraceEvent, TraceState};
-use crate::{host::Frame, xdr::ContractExecutable, Symbol, SymbolObject, SymbolSmall, Val};
+use crate::{
+    host::Frame,
+    xdr::{ContractExecutable, ContractExecutableType, Hash, LazyContractExecutable},
+    Symbol, SymbolObject, SymbolSmall, Val,
+};
 use core::fmt::{Debug, Display};
 
 impl Debug for TraceEvent<'_> {
@@ -48,6 +52,19 @@ impl From<&ContractExecutable> for ShortHashOrStaticStr {
         match exec {
             ContractExecutable::Wasm(hash) => hash.into(),
             ContractExecutable::StellarAsset => "SAC".into(),
+        }
+    }
+}
+
+impl From<&LazyContractExecutable> for ShortHashOrStaticStr {
+    fn from(exec: &LazyContractExecutable) -> Self {
+        match exec.discriminant() {
+            ContractExecutableType::Wasm => exec
+                .as_wasm()
+                .and_then(|h| Hash::try_from(&h).ok())
+                .as_ref()
+                .map_or_else(|| "".into(), Into::into),
+            ContractExecutableType::StellarAsset => "SAC".into(),
         }
     }
 }
@@ -111,7 +128,7 @@ impl TraceEvent<'_> {
             } => (
                 FrameId {
                     ty: "VM",
-                    id: (&instance.executable).into(),
+                    id: (&instance.executable()).into(),
                     sym: Some(*fn_name),
                 },
                 &args,
