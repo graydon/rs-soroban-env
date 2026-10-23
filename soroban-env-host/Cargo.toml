@@ -1,4 +1,5 @@
 [package]
+workspace = ".."
 name = "soroban-env-host"
 description = "Soroban contract host environment."
 homepage = "https://github.com/stellar/rs-soroban-env"

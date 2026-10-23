@@ -315,6 +315,10 @@ fn excessive_memory_growth() -> Result<(), HostError> {
         ));
         // only the intial page has been allocated
         assert_eq!(host.as_budget().get_wasm_mem_alloc()?, 0x10_000);
+        assert_eq!(
+            host.as_budget().get_vm_peak_linear_memory_bytes(),
+            Some(0x10_000)
+        );
     }
 
     // giving it 33 pages plus some small overhead should be okay
@@ -334,6 +338,10 @@ fn excessive_memory_growth() -> Result<(), HostError> {
         assert!(res.is_ok());
         // initial 1 page + 32 extra pages has been allocated
         assert_eq!(host.as_budget().get_wasm_mem_alloc()?, 33 * 0x10_000);
+        assert_eq!(
+            host.as_budget().get_vm_peak_linear_memory_bytes(),
+            Some(33 * 0x10_000)
+        );
     }
 
     Ok(())

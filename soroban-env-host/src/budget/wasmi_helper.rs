@@ -76,10 +76,16 @@ impl ResourceLimiter for Host {
                 self.charge_current_frame_linear_mem(charged)
                     .map_err(|_| errors::MemoryError::OutOfBoundsGrowth)?;
             }
+            self.as_budget()
+                .record_vm_linear_memory_bytes(desired as u64);
             Ok(true)
         } else {
             Err(errors::MemoryError::OutOfBoundsGrowth)
         }
+    }
+
+    fn memory_grow_failed(&mut self, _error: &errors::MemoryError) {
+        self.as_budget().rollback_vm_linear_memory_bytes();
     }
 
     fn table_growing(

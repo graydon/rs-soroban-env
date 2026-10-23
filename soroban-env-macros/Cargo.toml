@@ -1,4 +1,5 @@
 [package]
+workspace = ".."
 name = "soroban-env-macros"
 description = "Soroban contract environment macros."
 homepage = "https://github.com/stellar/rs-soroban-env"

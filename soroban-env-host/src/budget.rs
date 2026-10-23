@@ -10,7 +10,7 @@ pub use model::{MeteredCostComponent, ScaledU64};
 pub(crate) use wasmi_helper::{get_wasmi_config, load_calibrated_fuel_costs};
 
 use std::{
-    cell::{RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     fmt::{Debug, Display},
     rc::Rc,
 };
@@ -1205,14 +1205,20 @@ impl BudgetImpl {
 }
 
 #[derive(Clone)]
-pub struct Budget(pub(crate) Rc<RefCell<BudgetImpl>>);
+pub struct Budget(pub(crate) Rc<RefCell<BudgetImpl>>, Rc<VmMemoryTracker>);
+
+#[derive(Default)]
+struct VmMemoryTracker {
+    peak: Cell<Option<u64>>,
+    previous_peak: Cell<Option<u64>>,
+}
 
 #[allow(clippy::derivable_impls)]
 impl Default for Budget {
     fn default() -> Self {
         #[cfg(all(not(target_family = "wasm"), feature = "tracy"))]
         let _client = tracy_client::Client::start();
-        Self(Default::default())
+        Self(Default::default(), Default::default())
     }
 }
 
@@ -1257,6 +1263,23 @@ impl AsBudget for &Host {
 }
 
 impl Budget {
+    /// Largest single-VM linear memory allocation observed by this budget and its
+    /// clones, including failed calls. Returns `None` if no memory was allocated.
+    /// This observation does not affect metering or roll back with contract state.
+    pub fn get_vm_peak_linear_memory_bytes(&self) -> Option<u64> {
+        self.1.peak.get()
+    }
+
+    pub(crate) fn record_vm_linear_memory_bytes(&self, bytes: u64) {
+        let peak = self.1.peak.get();
+        self.1.previous_peak.set(peak);
+        self.1.peak.set(Some(peak.unwrap_or(0).max(bytes)));
+    }
+
+    pub(crate) fn rollback_vm_linear_memory_bytes(&self) {
+        self.1.peak.set(self.1.previous_peak.get());
+    }
+
     /// Initializes the budget from network configuration settings.
     pub fn try_from_configs(
         cpu_limit: u64,
@@ -1264,12 +1287,15 @@ impl Budget {
         cpu_cost_params: ContractCostParams,
         mem_cost_params: ContractCostParams,
     ) -> Result<Self, HostError> {
-        Ok(Self(Rc::new(RefCell::new(BudgetImpl::try_from_configs(
-            cpu_limit,
-            mem_limit,
-            cpu_cost_params,
-            mem_cost_params,
-        )?))))
+        Ok(Self(
+            Rc::new(RefCell::new(BudgetImpl::try_from_configs(
+                cpu_limit,
+                mem_limit,
+                cpu_cost_params,
+                mem_cost_params,
+            )?)),
+            Default::default(),
+        ))
     }
 
     /// Initializes the budget from network configuration settings.
